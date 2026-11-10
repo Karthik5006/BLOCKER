@@ -1,0 +1,14 @@
+<resources><style name="QuietSheetMotion"><item name="android:windowEnterAnimation">@anim/sheet_enter</item><item name="android:windowExitAnimation">@anim/sheet_exit</item></style>
+    <style name="QuietDialogMotion"><item name="android:windowEnterAnimation">@anim/dialog_enter</item><item name="android:windowExitAnimation">@anim/dialog_exit</item></style>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#BDDEC6</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#142A25</item>
+        <item name="android:navigationBarColor">#142A25</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#142A25</item>
+    </style>
+    <string name="accessibility_description">During a session, BLOCKER uses app window names to return selected apps, Settings, app stores and uninstall screens to your timer. It does not read screen text or passwords. Blocking continues in the background and ends at the deadline or after the full chosen hold. Enable this service each time you start. Banking apps may apply their own security checks.</string>
+    <string name="guard_description">Android requires administrator deactivation before uninstalling BLOCKER. During a session, blocking access guards Settings and uninstall screens. BLOCKER releases its guard at expiry or after the full chosen hold. Android recovery controls remain available. No lock, wipe, password or camera policies are requested.</string>
+</resources>
