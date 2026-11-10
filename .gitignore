@@ -1,0 +1,15 @@
+# Android/Gradle local state
+.gradle/
+**/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# Keep signing credentials and local secrets outside Git
+*.keystore
+*.jks
+keystore.properties
+signing.properties
+.env
+.env.*
