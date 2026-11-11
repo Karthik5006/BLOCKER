@@ -27,6 +27,7 @@ public class GuardRoutesTest {
         StateGuardTest.Policy.removals=0;
         handler(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),"android.launcher","android.launcher.Home");
         handler(new Intent(Settings.ACTION_SETTINGS),"com.android.settings","com.android.settings.Settings");
+        handler(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+c.getPackageName())),"com.android.settings","com.android.settings.applications.InstalledAppDetails");
         handler(new Intent(Intent.ACTION_DELETE,Uri.parse("package:"+c.getPackageName())),"com.google.android.permissioncontroller","com.android.packageinstaller.UninstallerActivity");
     }
     void handler(Intent intent,String pkg,String cls){
@@ -34,11 +35,15 @@ public class GuardRoutesTest {
         ResolveInfo r=new ResolveInfo();r.activityInfo=a;
         Shadows.shadowOf(c.getPackageManager()).addResolveInfoForIntent(intent,r);
     }
-    @Test public void blocksSelectedSettingsAndUninstallWhilePreservingEssentials(){
+    @Test public void allowsMainSettingsWhileBlockingAppDetailsAndUninstall(){
         GuardRoutes routes=new GuardRoutes(c);
         Set<String> chosen=Set.of("com.brave.browser","android.launcher");
         assertTrue(routes.shouldBlock(true,"com.brave.browser",null,chosen));
-        assertTrue(routes.shouldBlock(true,"com.android.settings",null,chosen));
+        assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.Settings",chosen));
+        assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.SubSettings",chosen));
+        assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.applications.InstalledAppDetails",chosen));
+        assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.DeviceAdminAdd",chosen));
+        assertTrue(routes.shouldBlock(true,"com.android.packageinstaller",null,chosen));
         assertTrue(routes.shouldBlock(true,"com.android.vending",null,chosen));
         assertTrue(routes.shouldBlock(true,"com.miui.securitycenter",null,chosen));
         assertFalse(routes.shouldBlock(true,"android.launcher",null,chosen));
@@ -51,16 +56,17 @@ public class GuardRoutesTest {
         assertTrue(routes.shouldBlock(true,"com.google.android.permissioncontroller","com.android.packageinstaller.UninstallerActivity",Set.of()));
         assertTrue(routes.shouldBlock(true,"com.android.permissioncontroller",".UninstallAppProgress",Set.of()));
     }
-    @Test public void resolvesCustomSettingsPackage(){
-        handler(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+c.getPackageName())),"vendor.settings","vendor.settings.AppDetails");
-        assertTrue(new GuardRoutes(c).shouldBlock(true,"vendor.settings",null,Set.of()));
+    @Test public void resolvesCustomAppDetailsActivity(){
+        handler(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+c.getPackageName())),"vendor.settings","vendor.settings.CustomScreen");
+        assertFalse(new GuardRoutes(c).shouldBlock(true,"vendor.settings","vendor.settings.MainSettings",Set.of()));
+        assertTrue(new GuardRoutes(c).shouldBlock(true,"vendor.settings","vendor.settings.CustomScreen",Set.of()));
     }
     @Test public void resolvesManufacturerStore(){
         handler(new Intent(Intent.ACTION_VIEW,Uri.parse("market://details?id="+c.getPackageName())),"phone.store","phone.store.Detail");
         assertTrue(new GuardRoutes(c).shouldBlock(true,"phone.store",null,Set.of()));
     }
-    void window(BlockerService service,String pkg){
-        service.onWindowChanged(pkg, null);
+    void window(BlockerService service,String pkg,String cls){
+        service.onWindowChanged(pkg, cls);
     }
     @Test public void serviceLeavesSetupAndNeverThrottlesBlocking(){
         State.prepare(c,1);
@@ -73,9 +79,9 @@ public class GuardRoutesTest {
             assertEquals(Intent.ACTION_MAIN,first.getAction());
             Intent timer=Shadows.shadowOf(RuntimeEnvironment.getApplication()).getNextStartedActivity();
             assertEquals(MainActivity.class.getName(),timer.getComponent().getClassName());assertFalse(timer.getBooleanExtra("blocked",false));
-            window(service,"com.android.settings");
+            window(service,"com.android.settings","com.android.settings.applications.InstalledAppDetails");
             assertEquals(Intent.ACTION_MAIN,Shadows.shadowOf(RuntimeEnvironment.getApplication()).getNextStartedActivity().getAction());
-            window(service,"com.android.settings");
+            window(service,"com.android.settings","com.android.settings.applications.InstalledAppDetails");
             assertEquals(Intent.ACTION_MAIN,Shadows.shadowOf(RuntimeEnvironment.getApplication()).getNextStartedActivity().getAction());
         } finally {controller.destroy();}
     }
@@ -85,7 +91,7 @@ public class GuardRoutesTest {
         try {
             BlockerService service=controller.get();
             service.beginSession();
-            ShadowSystemClock.advanceBy(Duration.ofMinutes(1));window(service,"com.android.settings");
+            ShadowSystemClock.advanceBy(Duration.ofMinutes(1));window(service,"com.android.settings","com.android.settings.applications.InstalledAppDetails");
             assertFalse(State.active(c));assertFalse(StateGuardTest.Policy.admin);assertTrue(BlockingAccess.disabled(c));
         } finally {controller.destroy();}
     }
