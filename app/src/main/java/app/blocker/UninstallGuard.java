@@ -1,6 +1,6 @@
 package app.blocker;
 import android.app.admin.*;import android.content.*;
-/** Personal-device admin adds friction. Enforced uninstall policy requires management authority. */
+/** Personal-device admin prevents direct uninstallation and intercepts deactivation attempts during an active session. */
 public final class UninstallGuard extends DeviceAdminReceiver {
  static final int UNKNOWN=-1,CLEAR=0,BLOCKED=1;
  static ComponentName component(Context c){return new ComponentName(c,UninstallGuard.class);}private static DevicePolicyManager policy(Context c){return c.getSystemService(DevicePolicyManager.class);}
@@ -15,6 +15,13 @@ public final class UninstallGuard extends DeviceAdminReceiver {
  static void release(Context c){DevicePolicyManager d=policy(c);if(d==null)return;if(State.prefs(c).getBoolean("ownsUninstallPolicy",false)){try{d.setUninstallBlocked(caller(c),c.getPackageName(),false);}catch(SecurityException denied){/* Read back actual policy below. */}if(managedStatus(c)==CLEAR)State.prefs(c).edit().remove("ownsUninstallPolicy").commit();}
   if(adminActive(c)&&!owner(c))try{d.removeActiveAdmin(component(c));}catch(SecurityException denied){/* Keep actual status visible. */}
  }
- public CharSequence onDisableRequested(Context c,Intent i){return State.active(c)?"Your session is running. Deactivating this administrator allows uninstalling BLOCKER. Android leaves this choice with you.":"Deactivating this administrator allows you to uninstall BLOCKER.";}
- public void onDisabled(Context c,Intent i){State.prefs(c).edit().putBoolean("guardRevoked",State.active(c)).apply();}
+ @Override public CharSequence onDisableRequested(Context c,Intent i){
+  State.restoreClock(c);
+  if(State.active(c)){
+   BlockerService.interceptNow(c);
+   return "Session in progress. BLOCKER cannot be deactivated or uninstalled until your timer finishes.";
+  }
+  return "Deactivating this administrator allows you to uninstall BLOCKER.";
+ }
+ @Override public void onDisabled(Context c,Intent i){State.prefs(c).edit().putBoolean("guardRevoked",State.active(c)).apply();}
 }

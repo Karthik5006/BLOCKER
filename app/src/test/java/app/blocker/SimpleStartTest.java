@@ -31,7 +31,7 @@ public class SimpleStartTest {
    assertEquals(UninstallGuard.component(a),request.getParcelableExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN));
    StateGuardTest.Policy.admin=true;
    ReflectionHelpers.callInstanceMethod(a,"onActivityResult",from(int.class,20),from(int.class,-1),from(Intent.class,null));
-   assertEquals(Settings.ACTION_ACCESSIBILITY_SETTINGS,Shadows.shadowOf(a).getNextStartedActivity().getAction());
+   assertEquals(Settings.ACTION_USAGE_ACCESS_SETTINGS,Shadows.shadowOf(a).getNextStartedActivity().getAction());
    assertFalse(State.active(a));
   }
  }

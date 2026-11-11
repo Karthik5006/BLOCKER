@@ -1,7 +1,6 @@
 package app.blocker;
 
 import android.Manifest;
-import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.*;
 import android.app.admin.DevicePolicyManager;
 import android.content.*;
@@ -11,7 +10,6 @@ import android.graphics.drawable.*;
 import android.os.*;
 import android.provider.Settings;
 import android.view.*;
-import android.view.accessibility.AccessibilityManager;
 import android.widget.*;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -37,7 +35,6 @@ public final class MainActivity extends Activity {
     private MotionPolicy motion;private AlpineScreen preview;private boolean sheetVisible,setupPreview,catalogLoading,catalogDirty,uninstallRequested;private long blockedSignal;private AppAdapter pickerAdapter;
     private final Set<Dialog> nativeDialogs=new HashSet<>();
     private final BroadcastReceiver packages=new BroadcastReceiver(){public void onReceive(Context c,Intent i){refreshCatalog();}};
-    private final android.database.ContentObserver accessChanges=new android.database.ContentObserver(handler){public void onChange(boolean self){if(exiting)finishQuietExit();else if(resumed)render();}};
     private boolean animations(){return motion!=null&&motion.allowed();}
     private void stopViewMotion(View v){v.animate().cancel();v.clearAnimation();v.setStateListAnimator(null);v.jumpDrawablesToCurrentState();if(v.getBackground() instanceof RippleDrawable){RippleDrawable r=(RippleDrawable)v.getBackground();if(r.getNumberOfLayers()>0)v.setBackground(r.getDrawable(0));}if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)stopViewMotion(((ViewGroup)v).getChildAt(i));}
     private void applyMotion(){boolean allowed=animations();if(web!=null)web.setMotionAllowed(allowed&&!sheetVisible&&!exiting);if(preview!=null)preview.setMotionAllowed(allowed);for(Dialog d:nativeDialogs)if(d.getWindow()!=null){d.getWindow().setWindowAnimations(allowed?(centeredDialogs.contains(d)?R.style.QuietDialogMotion:R.style.QuietSheetMotion):0);if(!allowed)stopViewMotion(d.getWindow().getDecorView());}}
@@ -56,7 +53,6 @@ public final class MainActivity extends Activity {
         super.onCreate(saved);
         outfit=Typeface.createFromAsset(getAssets(),"Outfit.ttf");
         motion=new MotionPolicy(this,this::applyMotion);
-        getContentResolver().registerContentObserver(Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),false,accessChanges);
         IntentFilter f=new IntentFilter();f.addAction(Intent.ACTION_PACKAGE_ADDED);f.addAction(Intent.ACTION_PACKAGE_REMOVED);f.addAction(Intent.ACTION_PACKAGE_REPLACED);f.addDataScheme("package");registerReceiver(packages,f);
         State.restoreClock(this);
         getWindow().setStatusBarColor(PAPER);getWindow().setNavigationBarColor(PAPER);
@@ -75,13 +71,18 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();resumed=true;motion.foreground(true);if(web!=null){web.resumeTimers();web.onResume();}if(preview!=null)preview.onResume();refreshCatalog();
         if(State.expired(this)){BlockerService.complete(this);page="complete";}
-        if(!State.active(this)&&!State.pending(this)&&(State.prefs(this).getBoolean("active",false)||State.prefs(this).getBoolean("pending",false)||UninstallGuard.active(this)||enabled()||!BlockingAccess.disabled(this)))BlockerService.exit(this);
+        if(State.pending(this)&&(State.prefs(this).getBoolean("managedSession",false)||UninstallGuard.adminActive(this))&&enabled()){
+            BlockerService.connectPending(this);
+        } else if(State.active(this)&&enabled()){
+            BlockerService.ensureRunning(this);
+        }
+        if(!State.active(this)&&!State.pending(this)&&(State.prefs(this).getBoolean("active",false)||State.prefs(this).getBoolean("pending",false)||UninstallGuard.active(this)||!BlockingAccess.disabled(this)))BlockerService.exit(this);
         if(resumeExit||(!State.active(this)&&State.prefs(this).getBoolean("exitAfterSession",false))){resumeExit=false;exit();return;}
         handler.removeCallbacks(ticker);handler.post(ticker);
         if(!exiting)render();else finishQuietExit();
     }
     @Override protected void onPause(){resumed=false;motion.foreground(false);if(web!=null){web.cancelHold();web.setMotionAllowed(false);web.onPause();web.pauseTimers();}if(preview!=null)preview.onPause();handler.removeCallbacks(ticker);super.onPause();}
-    @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);executor.shutdownNow();unregisterReceiver(packages);getContentResolver().unregisterContentObserver(accessChanges);motion.close();if(preview!=null){preview.destroy();preview=null;}if(web!=null){web.removeJavascriptInterface("BlockerUI");if(web.getParent()!=null)((ViewGroup)web.getParent()).removeView(web);web.destroy();}for(Dialog dialog:new ArrayList<>(nativeDialogs))dialog.dismiss();super.onDestroy();}
+    @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);executor.shutdownNow();unregisterReceiver(packages);motion.close();if(preview!=null){preview.destroy();preview=null;}if(web!=null){web.removeJavascriptInterface("BlockerUI");if(web.getParent()!=null)((ViewGroup)web.getParent()).removeView(web);web.destroy();}for(Dialog dialog:new ArrayList<>(nativeDialogs))dialog.dismiss();super.onDestroy();}
     @Override public void onBackPressed() {
         if(exiting)return;
         if(State.active(this)){exit();return;}
@@ -143,7 +144,7 @@ public final class MainActivity extends Activity {
         JSONObject state=new JSONObject();
         try {
             state.put("page",page);state.put("active",State.active(this));state.put("pending",State.pending(this));
-            state.put("release",!State.pending(this)&&!State.active(this)&&(enabled()||UninstallGuard.active(this)));
+            state.put("release",!State.pending(this)&&!State.active(this)&&(!BlockingAccess.disabled(this)||UninstallGuard.active(this)));
             state.put("loaded",loaded);state.put("minutes",State.prefs(this).getInt("duration",25));
             Set<String> selected=State.selected(this);
             state.put("count",catalog.stream().filter(e->!e.essential&&selected.contains(e.pkg)).count());
@@ -177,7 +178,7 @@ public final class MainActivity extends Activity {
         if(!resumed||exiting)return;
         if(name.equals("exit")){exit();return;}
         if(State.active(this)) {
-            if(name.equals("restore"))startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            if(name.equals("restore"))startActivity(BlockingAccess.nextPermissionIntent(this));
             return;
         }
         switch(name) {
@@ -204,7 +205,8 @@ public final class MainActivity extends Activity {
     private final Set<Dialog> centeredDialogs=new HashSet<>();
     private final class PopupScroll extends ScrollView {
         private final Path corners=new Path();
-        @Override protected void onSizeChanged(int w,int h,int oldW,int oldH){super.onSizeChanged(w,h,oldW,oldH);corners.reset();corners.addRoundRect(0,0,w,h,dp(26),dp(26),Path.Direction.CW);}
+        @Override protected void onSizeChanged(int w,int h,int oldW,int oldH){super.onSizeChanged(w,h,oldW,intOldH(oldH));corners.reset();corners.addRoundRect(0,0,w,h,dp(26),dp(26),Path.Direction.CW);}
+        private int intOldH(int v){return v;}
         @Override protected void dispatchDraw(Canvas canvas){int saved=canvas.save();canvas.translate(getScrollX(),getScrollY());canvas.clipPath(corners);canvas.translate(-getScrollX(),-getScrollY());super.dispatchDraw(canvas);canvas.restoreToCount(saved);}
         PopupScroll(){super(MainActivity.this);setFillViewport(false);setOverScrollMode(View.OVER_SCROLL_NEVER);setVerticalScrollBarEnabled(false);setHorizontalScrollBarEnabled(false);setPadding(0,0,0,0);}
         @Override protected void onMeasure(int width,int height){int cap=(int)(getResources().getDisplayMetrics().heightPixels*.86);int limit=View.MeasureSpec.getMode(height)==View.MeasureSpec.UNSPECIFIED?cap:Math.min(cap,View.MeasureSpec.getSize(height));super.onMeasure(width,View.MeasureSpec.makeMeasureSpec(limit,View.MeasureSpec.AT_MOST));}
@@ -360,12 +362,12 @@ public final class MainActivity extends Activity {
     }
     private void permissions() {
         LinearLayout content=column();
-        note(content,"Access is enabled for each session and released when the session ends.");
-        note(content,"Blocking access · "+(enabled()?"Enabled":State.pending(this)?"Waiting for setup":"Asked when you start"));
-        content.addView(button(State.pending(this)?"Finish accessibility setup":"About blocking access",false,()->{
+        note(content,"Blocking runs in a foreground service only while a session is active.");
+        note(content,"Usage & overlay access · "+(enabled()?"Enabled":State.pending(this)?"Waiting for setup":"Asked when you start"));
+        content.addView(button(State.pending(this)?"Finish access setup":"About blocking access",false,()->{
             setupDialog.dismiss();
             if(State.pending(this))openAccessibility();
-            else confirmation("Blocking access","BLOCKER uses app window names to return selected apps, Settings, app stores and uninstall screens to your timer. Screen text and passwords are not requested. Enable access each time you start.",null,"Got it",()->{},false);
+            else confirmation("Blocking access","BLOCKER uses Android Usage Access (UsageStatsManager) and Display over other apps to detect foreground app launches and return selected apps, Settings, app stores and uninstall screens to your timer without using AccessibilityService.",null,"Got it",()->{},false);
         }));
         boolean alerts=getSystemService(NotificationManager.class).areNotificationsEnabled();
         content.addView(button("Session alerts · "+(alerts?"On":"Off")+"    ›",false,()->{
@@ -375,7 +377,7 @@ public final class MainActivity extends Activity {
             else startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,getPackageName()));
         }));
         note(content,protectionExplanation());
-        note(content,"Access is released at session expiry or after the full chosen continuous hold.");
+        note(content,"The foreground monitoring service stops at session expiry or after the full chosen continuous hold.");
         content.addView(button("Uninstall BLOCKER",false,()->{setupDialog.dismiss();confirmUninstall();}));content.addView(button("Done",true,()->setupDialog.dismiss()));sheet("Session setup",content);
     }
     private boolean managedAvailable(){return UninstallGuard.owner(this)||UninstallGuard.delegated(this)||UninstallGuard.managedBlocked(this);}
@@ -413,10 +415,10 @@ public final class MainActivity extends Activity {
         if(!State.prefs(this).getBoolean("managedSession",false)&&!UninstallGuard.adminActive(this)){requestGuard();return;}
         BlockingAccess.prepare(this);
         if(enabled()) {
-            BlockerService.connectPending();render();
+            BlockerService.connectPending(this);render();
         } else {
-            try {startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));}
-            catch(ActivityNotFoundException e){toast("Open Accessibility in Android Settings and enable BLOCKER.");}
+            try {startActivity(BlockingAccess.nextPermissionIntent(this));}
+            catch(ActivityNotFoundException e){toast("Enable Usage Access and Display over other apps in Android Settings.");}
         }
     }
     private void updateTimers() {
@@ -432,7 +434,7 @@ public final class MainActivity extends Activity {
         }
     }
     private void finishHeldSession(){if(!resumed||!State.active(this)||exiting)return;BlockerService.complete(this);exit();}
-    private void confirmUninstall(){if(State.active(this)){toast("Finish the session or your hold first.");return;}confirmation("Uninstall BLOCKER?","BLOCKER will release its access and guard, then open Android’s uninstall confirmation. Uninstalling removes your local plan and history.","Keep BLOCKER","Continue",()->{uninstallRequested=true;exit();},true);}
+    private void confirmUninstall(){if(State.active(this)){toast("Finish the session or your hold first.");return;}confirmation("Uninstall BLOCKER?","BLOCKER will stop its service and release its guard, then open Android’s uninstall confirmation. Uninstalling removes your local plan and history.","Keep BLOCKER","Continue",()->{uninstallRequested=true;exit();},true);}
     private void exit(){
         if(State.expired(this))BlockerService.complete(this);
         if(State.active(this)){
@@ -448,11 +450,9 @@ public final class MainActivity extends Activity {
     private void finishQuietExit(){
         if(!exiting||exitFinished||isDestroyed()||isFinishing())return;
         handler.removeCallbacks(exitCheck);
-        // No success screen, permission dialog or second Close button. Give Android a short
-        // chance to finish asynchronous teardown. Inactive state always prevents interception.
-        boolean released=!enabled()&&!UninstallGuard.active(this);
+        boolean released=BlockingAccess.disabled(this)&&!UninstallGuard.active(this);
         if(!released&&SystemClock.elapsedRealtime()-exitStarted<3000){BlockerService.exit(this);handler.postDelayed(exitCheck,250);return;}
-        exitFinished=true;if(!enabled())BlockingAccess.disable(this);else BlockingAccess.awaitRelease(this);
+        exitFinished=true;BlockingAccess.disable(this);
         if(uninstallRequested)try{startActivity(new Intent(Intent.ACTION_DELETE,android.net.Uri.parse("package:"+getPackageName())));}catch(ActivityNotFoundException ignored){}
         BlockingAccess.releaseRuntimePermissions(this);finishAndRemoveTask();
     }

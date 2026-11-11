@@ -12,7 +12,8 @@ final class GuardRoutes {
     private final Set<String> essential;
     private final Set<String> guarded = new HashSet<>(Arrays.asList(
         "com.android.settings", "com.android.packageinstaller", "com.google.android.packageinstaller",
-        "com.miui.packageinstaller", "com.oplus.packageinstaller", "com.samsung.android.packageinstaller",
+        "com.miui.packageinstaller", "com.miui.global.packageinstaller", "com.oplus.packageinstaller",
+        "com.oneplus.packageinstaller", "com.samsung.android.packageinstaller",
         "com.miui.securitycenter", "com.coloros.safecenter", "com.oplus.safecenter",
         "com.vivo.permissionmanager", "com.iqoo.secure", "com.huawei.systemmanager",
         "com.android.vending", "com.sec.android.app.samsungapps", "com.xiaomi.mipicks",
@@ -25,8 +26,9 @@ final class GuardRoutes {
         PackageManager pm = c.getPackageManager();
         Uri ownPackage = Uri.parse("package:" + c.getPackageName());
         for (String action : new String[]{Settings.ACTION_SETTINGS, Settings.ACTION_SECURITY_SETTINGS,
-                Settings.ACTION_ACCESSIBILITY_SETTINGS, DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN})
+                Settings.ACTION_USAGE_ACCESS_SETTINGS, DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN})
             collect(pm, new Intent(action), false);
+        collect(pm, new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, ownPackage), false);
         collect(pm, new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, ownPackage), false);
         collect(pm, new Intent(Intent.ACTION_DELETE, ownPackage), true);
         collect(pm, new Intent(Intent.ACTION_UNINSTALL_PACKAGE, ownPackage), true);
@@ -41,16 +43,25 @@ final class GuardRoutes {
         }
     }
 
+    private static boolean isProtectedSystemDialog(String pkg, String className, Set<ComponentName> uninstalls) {
+        if (className == null) return false;
+        String normalized = className.startsWith(".") ? pkg + className : className;
+        if (uninstalls.contains(new ComponentName(pkg, normalized))) return true;
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        return lower.contains("uninstall")
+            || lower.contains("deviceadmin")
+            || lower.contains("installedappdetails")
+            || lower.contains("appinfo")
+            || lower.contains("DeletePackage".toLowerCase(Locale.ROOT));
+    }
+
     boolean shouldBlock(boolean active, String pkg, String className, Set<String> selected) {
         if(!active || pkg == null) return false;
+        if (isProtectedSystemDialog(pkg, className, uninstallActivities)) {
+            return true;
+        }
         if(essential.contains(pkg)) {
-            // Some Android versions host uninstall screens in PermissionController. Its ordinary
-            // permission prompts must remain available, as must Home, calls, keyboard and System UI.
-            if(!pkg.equals("com.android.permissioncontroller") && !pkg.equals("com.google.android.permissioncontroller")) return false;
-            if(className == null) return false;
-            String normalized = className.startsWith(".") ? pkg + className : className;
-            return uninstallActivities.contains(new ComponentName(pkg, normalized))
-                || normalized.toLowerCase(Locale.ROOT).contains("uninstall");
+            return false;
         }
         return guarded.contains(pkg) || selected.contains(pkg);
     }

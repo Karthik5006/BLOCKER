@@ -1,47 +1,82 @@
 package app.blocker;
 
 import android.Manifest;
+import android.app.AppOpsManager;
 import android.content.*;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
+import android.os.Process;
 import android.provider.Settings;
-import android.accessibilityservice.AccessibilityServiceInfo;
-import android.view.accessibility.AccessibilityManager;
 
-/** The service is available for setup, active blocking or finishing its own teardown. */
+/** Checks Usage Access + Overlay permissions and manages the BlockerService component state. */
 final class BlockingAccess {
-    private static ComponentName component(Context c){return new ComponentName(c,BlockerService.class);}
-    static boolean disabled(Context c){return c.getPackageManager().getComponentEnabledSetting(component(c))==PackageManager.COMPONENT_ENABLED_STATE_DISABLED;}
-    static boolean enabled(Context c){
-        for(AccessibilityServiceInfo info:c.getSystemService(AccessibilityManager.class).getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)){
-            if(info.getResolveInfo()==null||info.getResolveInfo().serviceInfo==null)continue;
-            android.content.pm.ServiceInfo service=info.getResolveInfo().serviceInfo;
-            if(component(c).equals(new ComponentName(service.packageName,service.name)))return true;
+    private static ComponentName component(Context c) {
+        return new ComponentName(c, BlockerService.class);
+    }
+
+    static boolean disabled(Context c) {
+        return c.getPackageManager().getComponentEnabledSetting(component(c)) == PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+    }
+
+    static boolean usageEnabled(Context c) {
+        AppOpsManager ops = c.getSystemService(AppOpsManager.class);
+        if (ops == null) return false;
+        int mode = Build.VERSION.SDK_INT >= 29
+            ? ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), c.getPackageName())
+            : ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), c.getPackageName());
+        if (mode == AppOpsManager.MODE_DEFAULT) {
+            return c.checkCallingOrSelfPermission(Manifest.permission.PACKAGE_USAGE_STATS) == PackageManager.PERMISSION_GRANTED;
         }
-        // A disabled component can disappear from the manager list before Android clears its
-        // saved grant. Wait for disableSelf() to clear that grant as well when possible.
-        String granted=Settings.Secure.getString(c.getContentResolver(),Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-        if(granted!=null)for(String entry:granted.split(":"))if(component(c).equals(ComponentName.unflattenFromString(entry)))return true;
-        return false;
+        return mode == AppOpsManager.MODE_ALLOWED;
     }
-    static void prepare(Context c){
-        if(!State.pending(c))return;
-        c.getPackageManager().setComponentEnabledSetting(component(c),PackageManager.COMPONENT_ENABLED_STATE_ENABLED,PackageManager.DONT_KILL_APP);
+
+    static boolean overlayEnabled(Context c) {
+        return Settings.canDrawOverlays(c);
     }
-    static void disable(Context c){
-        if(State.active(c)||State.pending(c)||disabled(c))return;
-        c.getPackageManager().setComponentEnabledSetting(component(c),PackageManager.COMPONENT_ENABLED_STATE_DISABLED,PackageManager.DONT_KILL_APP);
+
+    static boolean enabled(Context c) {
+        return usageEnabled(c) && overlayEnabled(c);
     }
-    static void awaitRelease(Context c){
-        // If teardown races a service bind, allow its onServiceConnected() callback to run.
-        // With no pending/active session it immediately calls disableSelf(), without a dialog.
-        if(!State.active(c)&&!State.pending(c)&&disabled(c))
-            c.getPackageManager().setComponentEnabledSetting(component(c),PackageManager.COMPONENT_ENABLED_STATE_ENABLED,PackageManager.DONT_KILL_APP);
+
+    static Intent nextPermissionIntent(Context c) {
+        if (!usageEnabled(c)) {
+            return new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS);
+        }
+        return new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + c.getPackageName()));
     }
-    static void releaseRuntimePermissions(Context c){
-        // POST_NOTIFICATIONS is the app's only dangerous/runtime permission. Android
+
+    static void prepare(Context c) {
+        if (!State.pending(c) && !State.active(c)) return;
+        c.getPackageManager().setComponentEnabledSetting(
+            component(c),
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+            PackageManager.DONT_KILL_APP
+        );
+    }
+
+    static void disable(Context c) {
+        if (State.active(c) || State.pending(c) || disabled(c)) return;
+        c.getPackageManager().setComponentEnabledSetting(
+            component(c),
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            PackageManager.DONT_KILL_APP
+        );
+    }
+
+    static void awaitRelease(Context c) {
+        disable(c);
+    }
+
+    static void releaseRuntimePermissions(Context c) {
+        // POST_NOTIFICATIONS is the app's only runtime permission. Android
         // applies this revocation asynchronously after the app has left the foreground.
-        if(Build.VERSION.SDK_INT>=33&&c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)==PackageManager.PERMISSION_GRANTED)
-            try{c.revokeSelfPermissionOnKill(Manifest.permission.POST_NOTIFICATIONS);}catch(SecurityException ignored){/* Android owns runtime permission revocation. */}
+        if (Build.VERSION.SDK_INT >= 33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            try {
+                c.revokeSelfPermissionOnKill(Manifest.permission.POST_NOTIFICATIONS);
+            } catch (SecurityException ignored) {
+                /* Android owns runtime permission revocation. */
+            }
+        }
     }
 }

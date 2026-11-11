@@ -2,7 +2,6 @@ package app.blocker;
 
 import android.app.*;
 import android.content.*;
-import android.os.Build;
 import java.util.Calendar;
 
 final class Notices {
@@ -24,14 +23,17 @@ final class Notices {
         n.createNotificationChannel(new NotificationChannel("session", "Active blocking", NotificationManager.IMPORTANCE_LOW));
         n.createNotificationChannel(new NotificationChannel("plan", "My daily plan", NotificationManager.IMPORTANCE_DEFAULT));
     }
-    static void session(Context c) {
+    static Notification sessionNotification(Context c) {
         channels(c);
         PendingIntent open = PendingIntent.getActivity(c, 1, new Intent(c, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification notification = new Notification.Builder(c, "session")
+        return new Notification.Builder(c, "session")
             .setSmallIcon(app.blocker.R.drawable.ic_leaf).setContentTitle("A little space is protected")
             .setContentText("Your selected apps can wait. Open your quiet timer.").setContentIntent(open)
             .setVisibility(Notification.VISIBILITY_PRIVATE).setOngoing(true)
             .setOnlyAlertOnce(true).setShowWhen(false).build();
+    }
+    static void session(Context c) {
+        Notification notification = sessionNotification(c);
         try { c.getSystemService(NotificationManager.class).notify(SESSION, notification); }
         catch (SecurityException ignored) { }
     }
