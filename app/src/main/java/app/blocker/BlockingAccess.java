@@ -9,14 +9,14 @@ import android.os.Build;
 import android.os.Process;
 import android.provider.Settings;
 
-/** Checks Usage Access + Overlay permissions and manages the BlockerService component state. */
+/** Checks Usage Access + Overlay permissions and manages the BlockerService availability state. */
 final class BlockingAccess {
     private static ComponentName component(Context c) {
         return new ComponentName(c, BlockerService.class);
     }
 
     static boolean disabled(Context c) {
-        return c.getPackageManager().getComponentEnabledSetting(component(c)) == PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+        return !State.prefs(c).getBoolean("serviceArmed", false);
     }
 
     static boolean usageEnabled(Context c) {
@@ -48,20 +48,19 @@ final class BlockingAccess {
 
     static void prepare(Context c) {
         if (!State.pending(c) && !State.active(c)) return;
-        c.getPackageManager().setComponentEnabledSetting(
-            component(c),
-            PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-            PackageManager.DONT_KILL_APP
-        );
+        State.prefs(c).edit().putBoolean("serviceArmed", true).commit();
+        try {
+            c.getPackageManager().setComponentEnabledSetting(
+                component(c),
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                PackageManager.DONT_KILL_APP
+            );
+        } catch (RuntimeException ignored) { }
     }
 
     static void disable(Context c) {
-        if (State.active(c) || State.pending(c) || disabled(c)) return;
-        c.getPackageManager().setComponentEnabledSetting(
-            component(c),
-            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-            PackageManager.DONT_KILL_APP
-        );
+        if (State.active(c) || State.pending(c)) return;
+        State.prefs(c).edit().putBoolean("serviceArmed", false).commit();
     }
 
     static void awaitRelease(Context c) {
@@ -69,14 +68,10 @@ final class BlockingAccess {
     }
 
     static void releaseRuntimePermissions(Context c) {
-        // POST_NOTIFICATIONS is the app's only runtime permission. Android
-        // applies this revocation asynchronously after the app has left the foreground.
         if (Build.VERSION.SDK_INT >= 33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
             try {
                 c.revokeSelfPermissionOnKill(Manifest.permission.POST_NOTIFICATIONS);
-            } catch (SecurityException ignored) {
-                /* Android owns runtime permission revocation. */
-            }
+            } catch (SecurityException ignored) { }
         }
     }
 }

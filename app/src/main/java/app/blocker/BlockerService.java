@@ -9,13 +9,12 @@ import android.os.*;
 import java.util.*;
 
 public final class BlockerService extends Service {
-    private static final long POLL_INTERVAL_MS = 250L;
+    private static final long POLL_INTERVAL_MS = 200L;
     private static BlockerService instance;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private GuardRoutes routes;
     private Set<String> selected = Collections.emptySet();
     private long lastRedirect = -700;
-    private long lastQueryTime = 0;
     private String currentPkg;
     private String currentClass;
 
@@ -58,7 +57,6 @@ public final class BlockerService extends Service {
             }
             PowerManager pm = getSystemService(PowerManager.class);
             if (pm != null && !pm.isInteractive()) {
-                // Pause polling completely while screen is off; screenState receiver resumes on wake.
                 return;
             }
             checkForeground();
@@ -68,7 +66,11 @@ public final class BlockerService extends Service {
 
     static void connectPending(Context c) {
         BlockingAccess.prepare(c);
-        if (instance != null && State.pending(c)) {
+        State.restoreClock(c);
+        if (State.pending(c)) {
+            State.activate(c);
+        }
+        if (instance != null) {
             instance.beginSession();
             return;
         }
@@ -88,13 +90,9 @@ public final class BlockerService extends Service {
             instance.redirect(true);
             return;
         }
-        Intent home = new Intent(Intent.ACTION_MAIN)
-            .addCategory(Intent.CATEGORY_HOME)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        try { c.startActivity(home); } catch (RuntimeException ignored) { }
         Intent intent = new Intent(c, MainActivity.class)
             .putExtra("blocked", true)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
         try { c.startActivity(intent); } catch (RuntimeException ignored) { }
     }
 
@@ -150,9 +148,9 @@ public final class BlockerService extends Service {
             shutdown();
             return;
         }
+        BlockingAccess.prepare(this);
         routes = new GuardRoutes(this);
         selected = State.selected(this);
-        lastQueryTime = System.currentTimeMillis() - 5_000L;
         Notification notification = Notices.sessionNotification(this);
         try {
             if (Build.VERSION.SDK_INT >= 34) {
@@ -175,9 +173,8 @@ public final class BlockerService extends Service {
         UsageStatsManager usm = getSystemService(UsageStatsManager.class);
         if (usm == null) return;
         long now = System.currentTimeMillis();
-        long start = lastQueryTime > 0 ? Math.max(now - 5_000L, lastQueryTime - 200L) : now - 5_000L;
-        lastQueryTime = now;
-        UsageEvents events = usm.queryEvents(start, now);
+        long lookback = currentPkg == null ? 60_000L : 15_000L;
+        UsageEvents events = usm.queryEvents(now - lookback, now);
         UsageEvents.Event event = new UsageEvents.Event();
         String latestPkg = null;
         String latestClass = null;
@@ -215,11 +212,11 @@ public final class BlockerService extends Service {
         try { startActivity(home); } catch (RuntimeException ignored) { }
 
         long now = SystemClock.elapsedRealtime();
-        if (now - lastRedirect < 700) return;
+        if (now - lastRedirect < 250) return;
         lastRedirect = now;
         Intent intent = new Intent(this, MainActivity.class)
             .putExtra("blocked", intercepted)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
         try { startActivity(intent); }
         catch (RuntimeException ignored) { /* Returning home remains the fallback. */ }
     }

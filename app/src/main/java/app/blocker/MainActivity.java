@@ -26,7 +26,7 @@ public final class MainActivity extends Activity {
     private Typeface outfit;
     private String page="block",query="";
     private List<AppCatalog.Entry> catalog=new ArrayList<>();
-    private boolean loaded,resumed,exiting,resumeExit,exitFinished;
+    private boolean loaded,resumed,exiting,resumeExit,exitFinished,overlayPrompted;
     private long exitStarted;
     private final Runnable exitCheck=this::finishQuietExit;
     private int lastSession=-1;
@@ -71,8 +71,14 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();resumed=true;motion.foreground(true);if(web!=null){web.resumeTimers();web.onResume();}if(preview!=null)preview.onResume();refreshCatalog();
         if(State.expired(this)){BlockerService.complete(this);page="complete";}
-        if(State.pending(this)&&(State.prefs(this).getBoolean("managedSession",false)||UninstallGuard.adminActive(this))&&enabled()){
-            BlockerService.connectPending(this);
+        if(State.pending(this)&&(State.prefs(this).getBoolean("managedSession",false)||UninstallGuard.adminActive(this))){
+            if(enabled()){
+                overlayPrompted=false;
+                BlockerService.connectPending(this);
+            } else if(BlockingAccess.usageEnabled(this)&&!BlockingAccess.overlayEnabled(this)&&!overlayPrompted){
+                overlayPrompted=true;
+                openAccessibility();
+            }
         } else if(State.active(this)&&enabled()){
             BlockerService.ensureRunning(this);
         }
@@ -103,7 +109,6 @@ public final class MainActivity extends Activity {
     }
     private Button button(String title,boolean primary,Runnable action) {
         Button b=new Button(this);b.setText(title);b.setAllCaps(false);b.setTextSize(14);
-        // Material's default state animator otherwise restores a raised shadow on press.
         b.setStateListAnimator(null);b.setElevation(0);b.setTranslationZ(0);b.setOutlineProvider(null);b.setBackgroundTintList(null);
         b.setTypeface(outfit);b.setFontVariationSettings("'wght' 500");b.setTextColor(primary?PAPER:INK);
         b.setMinWidth(0);b.setMinimumWidth(0);b.setMinHeight(dp(52));b.setMinimumHeight(dp(52));b.setGravity(Gravity.CENTER);
@@ -192,11 +197,11 @@ public final class MainActivity extends Activity {
             case "log":checkIn();break;
             case "delete":deleteEntries();break;
             case "start":
-                if(State.pending(this))openAccessibility();
+                if(State.pending(this)){overlayPrompted=false;openAccessibility();}
                 else if(State.selected(this).isEmpty())picker();
                 else startBlocking();
                 break;
-            case "cancel":if(State.pending(this)){BlockerService.exit(this);render();}break;
+            case "cancel":if(State.pending(this)){overlayPrompted=false;BlockerService.exit(this);render();}break;
             case "startPause":if(pauseLeft()>0){page="pause";render();}else startPause();break;
             case "returned":returned();break;
 
@@ -205,8 +210,7 @@ public final class MainActivity extends Activity {
     private final Set<Dialog> centeredDialogs=new HashSet<>();
     private final class PopupScroll extends ScrollView {
         private final Path corners=new Path();
-        @Override protected void onSizeChanged(int w,int h,int oldW,int oldH){super.onSizeChanged(w,h,oldW,intOldH(oldH));corners.reset();corners.addRoundRect(0,0,w,h,dp(26),dp(26),Path.Direction.CW);}
-        private int intOldH(int v){return v;}
+        @Override protected void onSizeChanged(int w,int h,int oldW,int oldH){super.onSizeChanged(w,h,oldW,oldH);corners.reset();corners.addRoundRect(0,0,w,h,dp(26),dp(26),Path.Direction.CW);}
         @Override protected void dispatchDraw(Canvas canvas){int saved=canvas.save();canvas.translate(getScrollX(),getScrollY());canvas.clipPath(corners);canvas.translate(-getScrollX(),-getScrollY());super.dispatchDraw(canvas);canvas.restoreToCount(saved);}
         PopupScroll(){super(MainActivity.this);setFillViewport(false);setOverScrollMode(View.OVER_SCROLL_NEVER);setVerticalScrollBarEnabled(false);setHorizontalScrollBarEnabled(false);setPadding(0,0,0,0);}
         @Override protected void onMeasure(int width,int height){int cap=(int)(getResources().getDisplayMetrics().heightPixels*.86);int limit=View.MeasureSpec.getMode(height)==View.MeasureSpec.UNSPECIFIED?cap:Math.min(cap,View.MeasureSpec.getSize(height));super.onMeasure(width,View.MeasureSpec.makeMeasureSpec(limit,View.MeasureSpec.AT_MOST));}
@@ -391,6 +395,7 @@ public final class MainActivity extends Activity {
         if(chosen.isEmpty()){toast("Select at least one app first.");return;}
         int minutes=State.prefs(this).getInt("duration",25);
         boolean managed=managedAvailable();
+        overlayPrompted=false;
         State.prefs(this).edit().putBoolean("managedSession",managed).apply();
         State.select(this,chosen);State.prepare(this,minutes);render();
         if(!managed&&!UninstallGuard.adminActive(this))requestGuard();

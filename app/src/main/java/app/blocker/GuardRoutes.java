@@ -22,7 +22,7 @@ final class GuardRoutes {
     private final Set<ComponentName> uninstallActivities = new HashSet<>();
 
     GuardRoutes(Context c) {
-        essential = AppCatalog.essential(c);
+        essential = new HashSet<>(AppCatalog.essential(c));
         PackageManager pm = c.getPackageManager();
         Uri ownPackage = Uri.parse("package:" + c.getPackageName());
         for (String action : new String[]{Settings.ACTION_SETTINGS, Settings.ACTION_SECURITY_SETTINGS,
@@ -33,6 +33,9 @@ final class GuardRoutes {
         collect(pm, new Intent(Intent.ACTION_DELETE, ownPackage), true);
         collect(pm, new Intent(Intent.ACTION_UNINSTALL_PACKAGE, ownPackage), true);
         collect(pm, new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=" + c.getPackageName())), false);
+        // Never allow guarded Settings or package-installer packages (e.g. FallbackHome in Settings)
+        // to be exempted as essential.
+        essential.removeAll(guarded);
     }
 
     private void collect(PackageManager pm, Intent intent, boolean uninstall) {
@@ -52,17 +55,17 @@ final class GuardRoutes {
             || lower.contains("deviceadmin")
             || lower.contains("installedappdetails")
             || lower.contains("appinfo")
-            || lower.contains("DeletePackage".toLowerCase(Locale.ROOT));
+            || lower.contains("deletepackage");
     }
 
     boolean shouldBlock(boolean active, String pkg, String className, Set<String> selected) {
         if(!active || pkg == null) return false;
-        if (isProtectedSystemDialog(pkg, className, uninstallActivities)) {
+        if (guarded.contains(pkg) || isProtectedSystemDialog(pkg, className, uninstallActivities)) {
             return true;
         }
         if(essential.contains(pkg)) {
             return false;
         }
-        return guarded.contains(pkg) || selected.contains(pkg);
+        return selected.contains(pkg);
     }
 }
