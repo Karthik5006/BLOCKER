@@ -11,6 +11,9 @@
         <intent><action android:name="android.settings.SETTINGS"/></intent>
         <intent><action android:name="android.settings.SECURITY_SETTINGS"/></intent>
         <intent><action android:name="android.settings.USAGE_ACCESS_SETTINGS"/></intent>
+        <intent><action android:name="android.settings.APPLICATION_SETTINGS"/></intent>
+        <intent><action android:name="android.settings.MANAGE_APPLICATIONS_SETTINGS"/></intent>
+        <intent><action android:name="android.settings.MANAGE_ALL_APPLICATIONS_SETTINGS"/></intent>
         <intent><action android:name="android.settings.action.MANAGE_OVERLAY_PERMISSION"/><data android:scheme="package"/></intent>
         <intent><action android:name="android.settings.APPLICATION_DETAILS_SETTINGS"/><data android:scheme="package"/></intent>
         <intent><action android:name="android.app.action.ADD_DEVICE_ADMIN"/></intent>

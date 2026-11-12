@@ -35,12 +35,13 @@ public class GuardRoutesTest {
         ResolveInfo r=new ResolveInfo();r.activityInfo=a;
         Shadows.shadowOf(c.getPackageManager()).addResolveInfoForIntent(intent,r);
     }
-    @Test public void allowsMainSettingsWhileBlockingAppDetailsAndUninstall(){
+    @Test public void allowsMainSettingsAndSubSettingsWhileBlockingAppDetailsAndUninstall(){
         GuardRoutes routes=new GuardRoutes(c);
         Set<String> chosen=Set.of("com.brave.browser","android.launcher");
         assertTrue(routes.shouldBlock(true,"com.brave.browser",null,chosen));
         assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.Settings",chosen));
         assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.SubSettings",chosen));
+        assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.spa.SpaActivity",chosen));
         assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.applications.InstalledAppDetails",chosen));
         assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.DeviceAdminAdd",chosen));
         assertTrue(routes.shouldBlock(true,"com.android.packageinstaller",null,chosen));
@@ -58,7 +59,7 @@ public class GuardRoutesTest {
     }
     @Test public void resolvesCustomAppDetailsActivity(){
         handler(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+c.getPackageName())),"vendor.settings","vendor.settings.CustomScreen");
-        assertFalse(new GuardRoutes(c).shouldBlock(true,"vendor.settings","vendor.settings.MainSettings",Set.of()));
+        assertFalse(new GuardRoutes(c).shouldBlock(true,"vendor.settings","vendor.settings.Settings",Set.of()));
         assertTrue(new GuardRoutes(c).shouldBlock(true,"vendor.settings","vendor.settings.CustomScreen",Set.of()));
     }
     @Test public void resolvesManufacturerStore(){
@@ -68,21 +69,19 @@ public class GuardRoutesTest {
     void window(BlockerService service,String pkg,String cls){
         service.onWindowChanged(pkg, cls);
     }
-    @Test public void serviceLeavesSetupAndNeverThrottlesBlocking(){
+    @Test public void serviceLeavesSetupAndRedirectsDirectlyToTimer(){
         State.prepare(c,1);
         ServiceController<BlockerService> controller=Robolectric.buildService(BlockerService.class).create();
         try {
             BlockerService service=controller.get();
             service.beginSession();
             assertTrue(State.active(c));
-            Intent first=Shadows.shadowOf(RuntimeEnvironment.getApplication()).getNextStartedActivity();
-            assertEquals(Intent.ACTION_MAIN,first.getAction());
             Intent timer=Shadows.shadowOf(RuntimeEnvironment.getApplication()).getNextStartedActivity();
             assertEquals(MainActivity.class.getName(),timer.getComponent().getClassName());assertFalse(timer.getBooleanExtra("blocked",false));
+            ShadowSystemClock.advanceBy(Duration.ofMillis(300));
             window(service,"com.android.settings","com.android.settings.applications.InstalledAppDetails");
-            assertEquals(Intent.ACTION_MAIN,Shadows.shadowOf(RuntimeEnvironment.getApplication()).getNextStartedActivity().getAction());
-            window(service,"com.android.settings","com.android.settings.applications.InstalledAppDetails");
-            assertEquals(Intent.ACTION_MAIN,Shadows.shadowOf(RuntimeEnvironment.getApplication()).getNextStartedActivity().getAction());
+            Intent blocked=Shadows.shadowOf(RuntimeEnvironment.getApplication()).getNextStartedActivity();
+            assertEquals(MainActivity.class.getName(),blocked.getComponent().getClassName());assertTrue(blocked.getBooleanExtra("blocked",false));
         } finally {controller.destroy();}
     }
     @Test public void expiryReleasesGuardBeforeAnyRedirect(){

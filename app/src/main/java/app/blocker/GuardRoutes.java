@@ -9,8 +9,9 @@ import java.util.*;
 
 /**
  * Cached window routing, active only during the user's timed session.
- * Allows normal Android Settings (Wi-Fi, Bluetooth, Display, Sound, etc.) while blocking
- * only app-info, permission revocation, device-admin deactivation, store, and uninstall routes.
+ * Allows main Android Settings and normal settings navigation (Wi-Fi, Bluetooth, Display, Sound,
+ * Battery, etc.) while blocking App Info, Manage Applications, Usage Access, Overlay Permission,
+ * Device Admin, App Stores, and Package Installer / Uninstaller screens.
  */
 final class GuardRoutes {
     private final Set<String> essential;
@@ -31,7 +32,7 @@ final class GuardRoutes {
         Uri ownPackage = Uri.parse("package:" + c.getPackageName());
 
         // Guard specific Settings sub-activities that could disable permissions, force-stop, or uninstall BLOCKER,
-        // without blocking the main Settings app (Wi-Fi, Bluetooth, Display, etc.).
+        // without blocking the main Settings app or general SubSettings (Wi-Fi, Bluetooth, Display, Sound, etc.).
         for (String action : new String[]{
                 Settings.ACTION_USAGE_ACCESS_SETTINGS,
                 Settings.ACTION_APPLICATION_SETTINGS,
@@ -54,6 +55,13 @@ final class GuardRoutes {
     private void collectActivityOnly(PackageManager pm, Intent intent) {
         for (ResolveInfo r : pm.queryIntentActivities(intent, 0)) {
             if (r.activityInfo == null || r.activityInfo.name == null) continue;
+            // Never add the top-level Settings homepage or generic SubSettings wrapper here.
+            String lower = r.activityInfo.name.toLowerCase(Locale.ROOT);
+            if (lower.endsWith(".settings")
+                    || lower.endsWith(".settingshomepageactivity")
+                    || lower.endsWith(".subsettings")) {
+                continue;
+            }
             guardedActivities.add(new ComponentName(r.activityInfo.packageName, r.activityInfo.name));
         }
     }

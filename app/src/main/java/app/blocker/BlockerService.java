@@ -5,7 +5,14 @@ import android.app.usage.UsageEvents;
 import android.app.usage.UsageStatsManager;
 import android.content.*;
 import android.content.pm.ServiceInfo;
+import android.graphics.PixelFormat;
 import android.os.*;
+import android.provider.Settings;
+import android.view.Gravity;
+import android.view.View;
+import android.view.WindowManager;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import java.util.*;
 
 public final class BlockerService extends Service {
@@ -14,9 +21,15 @@ public final class BlockerService extends Service {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private GuardRoutes routes;
     private Set<String> selected = Collections.emptySet();
-    private long lastRedirect = -700;
+    private long lastRedirect = -1000L;
+    private long lastBlockedEventTime = -1L;
+    private String lastBlockedPkg;
     private String currentPkg;
     private String currentClass;
+    private long currentEventTime;
+    private View shieldView;
+
+    private final Runnable autoHideShield = this::hideShield;
 
     private final BroadcastReceiver packages = new BroadcastReceiver() {
         @Override public void onReceive(Context c, Intent i) {
@@ -29,6 +42,7 @@ public final class BlockerService extends Service {
             if (!State.active(BlockerService.this)) return;
             String action = i.getAction();
             if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+                hideShield();
                 handler.removeCallbacks(poll);
             } else if (Intent.ACTION_SCREEN_ON.equals(action) || Intent.ACTION_USER_PRESENT.equals(action)) {
                 handler.removeCallbacks(poll);
@@ -57,6 +71,7 @@ public final class BlockerService extends Service {
             }
             PowerManager pm = getSystemService(PowerManager.class);
             if (pm != null && !pm.isInteractive()) {
+                hideShield();
                 return;
             }
             checkForeground();
@@ -69,6 +84,9 @@ public final class BlockerService extends Service {
         State.restoreClock(c);
         if (State.pending(c)) {
             State.activate(c);
+            if (State.active(c)) {
+                State.prefs(c).edit().putBoolean("justActivated", true).commit();
+            }
         }
         if (instance != null) {
             instance.beginSession();
@@ -85,8 +103,18 @@ public final class BlockerService extends Service {
         }
     }
 
+    static void onMainActivityResumed() {
+        if (instance != null) {
+            instance.currentPkg = instance.getPackageName();
+            instance.currentClass = MainActivity.class.getName();
+            instance.hideShield();
+        }
+    }
+
     static void interceptNow(Context c) {
         if (instance != null) {
+            instance.showShield();
+            instance.lastRedirect = -1000L;
             instance.redirect(true);
             return;
         }
@@ -132,8 +160,8 @@ public final class BlockerService extends Service {
     void beginSession() {
         instance = this;
         State.restoreClock(this);
-        boolean starting = State.pending(this);
-        if (starting) {
+        boolean starting = State.pending(this) || State.prefs(this).getBoolean("justActivated", false);
+        if (State.pending(this)) {
             State.activate(this);
             if (!State.active(this)) {
                 android.widget.Toast.makeText(
@@ -143,6 +171,7 @@ public final class BlockerService extends Service {
                 ).show();
             }
         }
+        State.prefs(this).edit().remove("justActivated").commit();
         if (!State.active(this)) {
             if (State.expired(this)) State.completed(this);
             shutdown();
@@ -166,10 +195,18 @@ public final class BlockerService extends Service {
         scheduleDeadline();
         handler.removeCallbacks(poll);
         handler.post(poll);
-        if (starting) redirect(false);
+        if (starting && !MainActivity.isInForeground()) {
+            redirect(false);
+        }
     }
 
     private void checkForeground() {
+        if (MainActivity.isInForeground()) {
+            currentPkg = getPackageName();
+            currentClass = MainActivity.class.getName();
+            hideShield();
+            return;
+        }
         UsageStatsManager usm = getSystemService(UsageStatsManager.class);
         if (usm == null) return;
         long now = System.currentTimeMillis();
@@ -178,20 +215,48 @@ public final class BlockerService extends Service {
         UsageEvents.Event event = new UsageEvents.Event();
         String latestPkg = null;
         String latestClass = null;
+        long latestTime = -1L;
         while (events != null && events.hasNextEvent()) {
             events.getNextEvent(event);
             if (event.getEventType() == UsageEvents.Event.ACTIVITY_RESUMED) {
                 latestPkg = event.getPackageName();
                 latestClass = event.getClassName();
+                latestTime = event.getTimeStamp();
             }
         }
         if (latestPkg != null) {
             currentPkg = latestPkg;
             currentClass = latestClass;
+            currentEventTime = latestTime;
         }
-        if (currentPkg != null) {
-            onWindowChanged(currentPkg, currentClass);
+        if (currentPkg == null || getPackageName().equals(currentPkg)) {
+            hideShield();
+            return;
         }
+        if (routes == null || !routes.shouldBlock(true, currentPkg, currentClass, selected)) {
+            hideShield();
+            return;
+        }
+        long elapsed = SystemClock.elapsedRealtime() - lastRedirect;
+        // Avoid firing duplicate MainActivity launches for the exact same foreground transition
+        // while MainActivity is already animating into the foreground.
+        if (currentEventTime > 0
+                && currentEventTime == lastBlockedEventTime
+                && currentPkg.equals(lastBlockedPkg)
+                && elapsed < 650L) {
+            return;
+        }
+        // If a previous redirect for this same event did not bring MainActivity to the front after 650ms,
+        // put up the overlay shield to block interaction with the restricted screen.
+        if (currentEventTime > 0
+                && currentEventTime == lastBlockedEventTime
+                && currentPkg.equals(lastBlockedPkg)
+                && elapsed >= 650L) {
+            showShield();
+        }
+        lastBlockedEventTime = currentEventTime;
+        lastBlockedPkg = currentPkg;
+        onWindowChanged(currentPkg, currentClass);
     }
 
     void onWindowChanged(String pkg, String activity) {
@@ -201,24 +266,79 @@ public final class BlockerService extends Service {
             return;
         }
         if (pkg == null) return;
-        if (routes == null || !routes.shouldBlock(true, pkg, activity, selected)) return;
+        if (routes == null || !routes.shouldBlock(true, pkg, activity, selected)) {
+            hideShield();
+            return;
+        }
+        String lower = activity == null ? "" : activity.toLowerCase(Locale.ROOT);
+        if (lower.contains("deviceadmin") || lower.contains("uninstall") || lower.contains("deletepackage")) {
+            showShield();
+        }
         redirect(true);
     }
 
-    private void redirect(boolean intercepted) {
-        Intent home = new Intent(Intent.ACTION_MAIN)
-            .addCategory(Intent.CATEGORY_HOME)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        try { startActivity(home); } catch (RuntimeException ignored) { }
+    private void showShield() {
+        if (!Settings.canDrawOverlays(this)) return;
+        handler.removeCallbacks(autoHideShield);
+        handler.postDelayed(autoHideShield, 1200L);
+        if (shieldView != null) return;
+        WindowManager wm = getSystemService(WindowManager.class);
+        if (wm == null) return;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setBackgroundColor(0xff142a25);
+        TextView label = new TextView(this);
+        label.setText("That can wait. Breathe.");
+        label.setTextColor(0xfff4eddd);
+        label.setTextSize(20);
+        label.setGravity(Gravity.CENTER);
+        box.addView(label);
+        box.setOnClickListener(v -> redirect(true));
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_FULLSCREEN
+                | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+            PixelFormat.OPAQUE
+        );
+        params.gravity = Gravity.CENTER;
+        try {
+            wm.addView(box, params);
+            shieldView = box;
+        } catch (RuntimeException ignored) { }
+    }
 
+    private void hideShield() {
+        handler.removeCallbacks(autoHideShield);
+        if (shieldView == null) return;
+        WindowManager wm = getSystemService(WindowManager.class);
+        if (wm != null) {
+            try { wm.removeViewImmediate(shieldView); }
+            catch (RuntimeException ignored) {
+                try { wm.removeView(shieldView); } catch (RuntimeException ignored2) { }
+            }
+        }
+        shieldView = null;
+    }
+
+    private void redirect(boolean intercepted) {
         long now = SystemClock.elapsedRealtime();
-        if (now - lastRedirect < 250) return;
+        if (now - lastRedirect < 250L) return;
         lastRedirect = now;
         Intent intent = new Intent(this, MainActivity.class)
             .putExtra("blocked", intercepted)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        try { startActivity(intent); }
-        catch (RuntimeException ignored) { /* Returning home remains the fallback. */ }
+        try {
+            startActivity(intent);
+        } catch (RuntimeException fallbackToHome) {
+            Intent home = new Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_HOME)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            try { startActivity(home); } catch (RuntimeException ignored) { }
+        }
     }
 
     private void scheduleDeadline() {
@@ -245,6 +365,7 @@ public final class BlockerService extends Service {
     }
 
     private void shutdown() {
+        hideShield();
         State.stop(this);
         Notices.cancelSessionAlarm(this);
         UninstallGuard.release(this);
@@ -260,6 +381,7 @@ public final class BlockerService extends Service {
     }
 
     @Override public void onDestroy() {
+        hideShield();
         try { unregisterReceiver(packages); } catch (IllegalArgumentException ignored) { }
         try { unregisterReceiver(screenState); } catch (IllegalArgumentException ignored) { }
         handler.removeCallbacksAndMessages(null);
