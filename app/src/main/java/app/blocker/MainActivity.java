@@ -373,7 +373,7 @@ public final class MainActivity extends Activity {
         content.addView(button(State.pending(this)?"Finish access setup":"About blocking access",false,()->{
             setupDialog.dismiss();
             if(State.pending(this)){lastSetupLaunch=-2000L;openAccessibility();}
-            else confirmation("Blocking access","BLOCKER uses Android Usage Access (UsageStatsManager) and Display over other apps to detect foreground app launches and return selected apps, app-info/permission screens, app stores and uninstall screens to your timer without using AccessibilityService.",null,"Got it",()->{},false);
+            else confirmation("Blocking access","During a session, BLOCKER detects when you open a selected app and returns you to the timer. Android App info stays available.",null,"Got it",()->{},false);
         }));
         boolean alerts=getSystemService(NotificationManager.class).areNotificationsEnabled();
         content.addView(button("Session alerts · "+(alerts?"On":"Off")+"    ›",false,()->{
@@ -389,7 +389,7 @@ public final class MainActivity extends Activity {
     private boolean managedAvailable(){return UninstallGuard.owner(this)||UninstallGuard.delegated(this)||UninstallGuard.managedBlocked(this);}
     private String protectionExplanation(){
         return managedAvailable()?"Managed session. The timer starts only after Android confirms the uninstall policy.":
-            "During a session, BLOCKER guards app-info, permission, device-admin, app store and uninstall screens while keeping main Settings available. Device admin must be active before the timer starts.";
+            "Device admin must be active before the timer starts. If you try to deactivate BLOCKER during a session, it asks you to return to the timer.";
     }
     private void startBlocking() {
         if(State.active(this)||State.pending(this))return;

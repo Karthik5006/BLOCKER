@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 android {
     namespace 'app.blocker'
     compileSdk 35
-    defaultConfig { applicationId 'app.blocker'; minSdk 26; targetSdk 35; versionCode 9; versionName '5.4' }
+    defaultConfig { applicationId 'app.blocker'; minSdk 26; targetSdk 35; versionCode 10; versionName '5.4.1' }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     signingConfigs {
         personal {

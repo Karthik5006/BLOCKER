@@ -19,7 +19,7 @@ public final class UninstallGuard extends DeviceAdminReceiver {
   State.restoreClock(c);
   if(State.active(c)){
    BlockerService.interceptNow(c);
-   return "Session in progress. BLOCKER cannot be deactivated or uninstalled until your timer finishes.";
+   return "Your session is active. Deactivating BLOCKER removes its administrator protection.";
   }
   return "Deactivating this administrator allows you to uninstall BLOCKER.";
  }

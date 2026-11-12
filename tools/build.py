@@ -28,7 +28,7 @@ manifest.getroot().set("package", "app.blocker")
 manifest.write(build / "AndroidManifest.xml")
 run(tools / "aapt2", "link", "-o", build / "base.apk", "--manifest", build / "AndroidManifest.xml",
     "-I", android, "--java", build / "generated", "--min-sdk-version", "26", "--target-sdk-version", "35",
-    "--version-code", "9", "--version-name", "5.4", "-A", root / "app/src/main/assets", build / "resources.zip")
+    "--version-code", "10", "--version-name", "5.4.1", "-A", root / "app/src/main/assets", build / "resources.zip")
 classes = build / "classes"
 classes.mkdir()
 sources = list((root / "app/src/main/java").rglob("*.java")) + list((build / "generated").rglob("*.java"))

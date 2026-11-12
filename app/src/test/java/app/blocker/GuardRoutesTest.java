@@ -35,46 +35,19 @@ public class GuardRoutesTest {
         ResolveInfo r=new ResolveInfo();r.activityInfo=a;
         Shadows.shadowOf(c.getPackageManager()).addResolveInfoForIntent(intent,r);
     }
-    @Test public void allowsMainSettingsWhileBlockingSubSettingsSearchAndUninstall(){
-        GuardRoutes routes=new GuardRoutes(c);
-        Set<String> chosen=Set.of("com.brave.browser","android.launcher");
-        assertTrue(routes.shouldBlock(true,"com.brave.browser",null,chosen));
-        assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.Settings",chosen));
-        assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.homepage.SettingsHomepageActivity",chosen));
-        assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.Settings$WifiSettingsActivity",chosen));
-        assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.SubSettings",chosen));
-        assertTrue(routes.shouldBlock(true,"com.samsung.android.settings.intelligence","com.samsung.android.settings.search.SearchActivity",chosen));
-        assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.spa.SpaActivity",chosen));
-        assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.applications.InstalledAppDetails",chosen));
-        assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.DeviceAdminAdd",chosen));
-        assertTrue(routes.shouldBlock(true,"com.google.android.packageinstaller","com.android.packageinstaller.DeleteStagedFileOnResult",chosen));
-        assertTrue(routes.shouldBlock(true,"com.android.packageinstaller",null,chosen));
-        assertTrue(routes.shouldBlock(true,"com.android.vending",null,chosen));
-        assertTrue(routes.shouldBlock(true,"com.miui.securitycenter",null,chosen));
-        assertFalse(routes.shouldBlock(true,"android.launcher",null,chosen));
-        assertFalse(routes.shouldBlock(true,c.getPackageName(),null,chosen));
-        assertFalse(routes.shouldBlock(false,"com.brave.browser",null,chosen));
+    @Test public void sharedAppInfoRemainsAvailableWithOldSelectAllChoices() {
+        handler(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:"+c.getPackageName())),
+                "com.android.settings", "com.android.settings.SubSettings");
+        GuardRoutes routes = new GuardRoutes(AppCatalog.essential(c));
+        Set<String> selected = Set.of("com.android.settings", "com.brave.browser", "android.launcher");
+        assertFalse(routes.shouldBlock("com.android.settings", selected));
+        assertFalse(routes.shouldBlock("android.launcher", selected));
+        assertFalse(routes.shouldBlock("com.android.vending", selected));
+        assertTrue(routes.shouldBlock("com.brave.browser", selected));
     }
-    @Test public void blocksOnlyUninstallInsidePermissionController(){
-        GuardRoutes routes=new GuardRoutes(c);
-        assertFalse(routes.shouldBlock(true,"com.google.android.permissioncontroller","com.android.permissioncontroller.permission.ui.GrantPermissionsActivity",Set.of()));
-        assertTrue(routes.shouldBlock(true,"com.google.android.permissioncontroller","com.android.packageinstaller.UninstallerActivity",Set.of()));
-        assertTrue(routes.shouldBlock(true,"com.android.permissioncontroller",".UninstallAppProgress",Set.of()));
-    }
-    @Test public void resolvesCustomAppDetailsActivity(){
-        handler(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+c.getPackageName())),"vendor.settings","vendor.settings.CustomScreen");
-        assertFalse(new GuardRoutes(c).shouldBlock(true,"vendor.settings","vendor.settings.Settings",Set.of()));
-        assertTrue(new GuardRoutes(c).shouldBlock(true,"vendor.settings","vendor.settings.CustomScreen",Set.of()));
-    }
-    @Test public void resolvesManufacturerStore(){
-        handler(new Intent(Intent.ACTION_VIEW,Uri.parse("market://details?id="+c.getPackageName())),"phone.store","phone.store.Detail");
-        assertTrue(new GuardRoutes(c).shouldBlock(true,"phone.store",null,Set.of()));
-    }
-    void window(BlockerService service,String pkg,String cls){
-        service.onWindowChanged(pkg, cls);
-    }
+
     @Test public void serviceLeavesSetupAndRedirectsDirectlyToTimer(){
-        State.prepare(c,1);
+        State.select(c,Set.of("com.brave.browser"));State.prepare(c,1);
         ServiceController<BlockerService> controller=Robolectric.buildService(BlockerService.class).create();
         try {
             BlockerService service=controller.get();
@@ -83,18 +56,18 @@ public class GuardRoutesTest {
             Intent timer=Shadows.shadowOf(RuntimeEnvironment.getApplication()).getNextStartedActivity();
             assertEquals(MainActivity.class.getName(),timer.getComponent().getClassName());assertFalse(timer.getBooleanExtra("blocked",false));
             ShadowSystemClock.advanceBy(Duration.ofMillis(300));
-            window(service,"com.android.settings","com.android.settings.applications.InstalledAppDetails");
+            service.onWindowChanged("com.brave.browser");
             Intent blocked=Shadows.shadowOf(RuntimeEnvironment.getApplication()).getNextStartedActivity();
             assertEquals(MainActivity.class.getName(),blocked.getComponent().getClassName());assertTrue(blocked.getBooleanExtra("blocked",false));
         } finally {controller.destroy();}
     }
     @Test public void expiryReleasesGuardBeforeAnyRedirect(){
-        State.prepare(c,1);
+        State.select(c,Set.of("com.brave.browser"));State.prepare(c,1);
         ServiceController<BlockerService> controller=Robolectric.buildService(BlockerService.class).create();
         try {
             BlockerService service=controller.get();
             service.beginSession();
-            ShadowSystemClock.advanceBy(Duration.ofMinutes(1));window(service,"com.android.settings","com.android.settings.applications.InstalledAppDetails");
+            ShadowSystemClock.advanceBy(Duration.ofMinutes(1));service.onWindowChanged("com.brave.browser");
             assertFalse(State.active(c));assertFalse(StateGuardTest.Policy.admin);assertTrue(BlockingAccess.disabled(c));
         } finally {controller.destroy();}
     }

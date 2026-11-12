@@ -28,14 +28,13 @@ public final class BlockerService extends Service {
     private long lastBlockedEventTime = -1L;
     private String lastBlockedPkg;
     private String currentPkg;
-    private String currentClass;
     private long currentEventTime;
     private View shieldView;
     private TextView shieldClock;
 
     private final BroadcastReceiver packages = new BroadcastReceiver() {
         @Override public void onReceive(Context c, Intent i) {
-            if (State.active(BlockerService.this)) routes = new GuardRoutes(BlockerService.this);
+            if (State.active(BlockerService.this)) routes = new GuardRoutes(AppCatalog.essential(BlockerService.this));
         }
     };
 
@@ -111,7 +110,6 @@ public final class BlockerService extends Service {
     static void onMainActivityResumed() {
         if (instance != null) {
             instance.currentPkg = instance.getPackageName();
-            instance.currentClass = MainActivity.class.getName();
             instance.hideShield();
         }
     }
@@ -183,7 +181,7 @@ public final class BlockerService extends Service {
             return;
         }
         BlockingAccess.prepare(this);
-        routes = new GuardRoutes(this);
+        routes = new GuardRoutes(AppCatalog.essential(this));
         selected = State.selected(this);
         Notification notification = Notices.sessionNotification(this);
         try {
@@ -208,7 +206,6 @@ public final class BlockerService extends Service {
     private void checkForeground() {
         if (MainActivity.isInForeground()) {
             currentPkg = getPackageName();
-            currentClass = MainActivity.class.getName();
             hideShield();
             return;
         }
@@ -219,30 +216,27 @@ public final class BlockerService extends Service {
         UsageEvents events = usm.queryEvents(now - lookback, now);
         UsageEvents.Event event = new UsageEvents.Event();
         String latestPkg = null;
-        String latestClass = null;
         long latestTime = -1L;
         while (events != null && events.hasNextEvent()) {
             events.getNextEvent(event);
             if (event.getEventType() == UsageEvents.Event.ACTIVITY_RESUMED) {
                 latestPkg = event.getPackageName();
-                latestClass = event.getClassName();
                 latestTime = event.getTimeStamp();
             }
         }
         if (latestPkg != null) {
             currentPkg = latestPkg;
-            currentClass = latestClass;
             currentEventTime = latestTime;
         }
         if (currentPkg == null || getPackageName().equals(currentPkg)) {
             hideShield();
             return;
         }
-        if (routes == null || !routes.shouldBlock(true, currentPkg, currentClass, selected)) {
+        if (routes == null || !routes.shouldBlock(currentPkg, selected)) {
             hideShield();
             return;
         }
-        // Immediately cover the blocked app or uninstall/settings screen with the persistent shield
+        // Immediately cover the selected app with the persistent shield
         // so it cannot be interacted with even if OEM background activity launch rules delay MainActivity.
         showShield();
         long elapsed = SystemClock.elapsedRealtime() - lastRedirect;
@@ -256,17 +250,17 @@ public final class BlockerService extends Service {
         }
         lastBlockedEventTime = currentEventTime;
         lastBlockedPkg = currentPkg;
-        onWindowChanged(currentPkg, currentClass);
+        onWindowChanged(currentPkg);
     }
 
-    void onWindowChanged(String pkg, String activity) {
+    void onWindowChanged(String pkg) {
         if (!State.active(this)) {
             if (State.expired(this)) State.completed(this);
             shutdown();
             return;
         }
         if (pkg == null) return;
-        if (routes == null || !routes.shouldBlock(true, pkg, activity, selected)) {
+        if (routes == null || !routes.shouldBlock(pkg, selected)) {
             hideShield();
             return;
         }

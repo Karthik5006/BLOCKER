@@ -9,6 +9,6 @@
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowBackground">#142A25</item>
     </style>
-    <string name="accessibility_description">During a session, BLOCKER uses app window names to return selected apps, Settings, app stores and uninstall screens to your timer. It does not read screen text or passwords. Blocking continues in the background and ends at the deadline or after the full chosen hold. Enable this service each time you start. Banking apps may apply their own security checks.</string>
-    <string name="guard_description">Android requires administrator deactivation before uninstalling BLOCKER. During a session, blocking access guards Settings and uninstall screens. BLOCKER releases its guard at expiry or after the full chosen hold. Android recovery controls remain available. No lock, wipe, password or camera policies are requested.</string>
+    <string name="accessibility_description">During a session, BLOCKER uses app window names to return selected apps to your timer. It does not read screen text or passwords. Blocking continues in the background and ends at the deadline or after the full chosen hold. Enable this service each time you start. Banking apps may apply their own security checks.</string>
+    <string name="guard_description">Android requires administrator deactivation before uninstalling BLOCKER. During a session, BLOCKER warns you if you deactivate its own administrator permission. BLOCKER releases its guard at expiry or after the full chosen hold. Android recovery controls remain available. No lock, wipe, password or camera policies are requested.</string>
 </resources>
