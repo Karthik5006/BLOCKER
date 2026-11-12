@@ -6,17 +6,20 @@ import android.app.usage.UsageStatsManager;
 import android.content.*;
 import android.content.pm.ServiceInfo;
 import android.graphics.PixelFormat;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.*;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import java.util.*;
 
 public final class BlockerService extends Service {
-    private static final long POLL_INTERVAL_MS = 200L;
+    private static final long POLL_INTERVAL_MS = 180L;
     private static BlockerService instance;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private GuardRoutes routes;
@@ -28,8 +31,7 @@ public final class BlockerService extends Service {
     private String currentClass;
     private long currentEventTime;
     private View shieldView;
-
-    private final Runnable autoHideShield = this::hideShield;
+    private TextView shieldClock;
 
     private final BroadcastReceiver packages = new BroadcastReceiver() {
         @Override public void onReceive(Context c, Intent i) {
@@ -75,6 +77,9 @@ public final class BlockerService extends Service {
                 return;
             }
             checkForeground();
+            if (shieldView != null && shieldClock != null) {
+                shieldClock.setText(State.clock(State.remaining(BlockerService.this)) + " remaining in your session");
+            }
             handler.postDelayed(this, POLL_INTERVAL_MS);
         }
     };
@@ -237,22 +242,17 @@ public final class BlockerService extends Service {
             hideShield();
             return;
         }
+        // Immediately cover the blocked app or uninstall/settings screen with the persistent shield
+        // so it cannot be interacted with even if OEM background activity launch rules delay MainActivity.
+        showShield();
         long elapsed = SystemClock.elapsedRealtime() - lastRedirect;
-        // Avoid firing duplicate MainActivity launches for the exact same foreground transition
-        // while MainActivity is already animating into the foreground.
         if (currentEventTime > 0
                 && currentEventTime == lastBlockedEventTime
-                && currentPkg.equals(lastBlockedPkg)
-                && elapsed < 650L) {
+                && currentPkg.equals(lastBlockedPkg)) {
             return;
         }
-        // If a previous redirect for this same event did not bring MainActivity to the front after 650ms,
-        // put up the overlay shield to block interaction with the restricted screen.
-        if (currentEventTime > 0
-                && currentEventTime == lastBlockedEventTime
-                && currentPkg.equals(lastBlockedPkg)
-                && elapsed >= 650L) {
-            showShield();
+        if (elapsed < 500L) {
+            return;
         }
         lastBlockedEventTime = currentEventTime;
         lastBlockedPkg = currentPkg;
@@ -270,38 +270,67 @@ public final class BlockerService extends Service {
             hideShield();
             return;
         }
-        String lower = activity == null ? "" : activity.toLowerCase(Locale.ROOT);
-        if (lower.contains("deviceadmin") || lower.contains("uninstall") || lower.contains("deletepackage")) {
-            showShield();
-        }
+        showShield();
         redirect(true);
     }
 
+    private int dp(float v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
     private void showShield() {
-        if (!Settings.canDrawOverlays(this)) return;
-        handler.removeCallbacks(autoHideShield);
-        handler.postDelayed(autoHideShield, 1200L);
-        if (shieldView != null) return;
+        if (!Settings.canDrawOverlays(this) || shieldView != null) return;
         WindowManager wm = getSystemService(WindowManager.class);
         if (wm == null) return;
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER);
+        box.setPadding(dp(28), dp(28), dp(28), dp(28));
         box.setBackgroundColor(0xff142a25);
-        TextView label = new TextView(this);
-        label.setText("That can wait. Breathe.");
-        label.setTextColor(0xfff4eddd);
-        label.setTextSize(20);
-        label.setGravity(Gravity.CENTER);
-        box.addView(label);
-        box.setOnClickListener(v -> redirect(true));
+
+        TextView title = new TextView(this);
+        title.setText("That can wait. Breathe.");
+        title.setTextColor(0xfff4eddd);
+        title.setTextSize(24);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setGravity(Gravity.CENTER);
+        box.addView(title);
+
+        TextView sub = new TextView(this);
+        sub.setText(State.clock(State.remaining(this)) + " remaining in your session");
+        sub.setTextColor(0xffb2c2b5);
+        sub.setTextSize(15);
+        sub.setGravity(Gravity.CENTER);
+        sub.setPadding(0, dp(10), 0, dp(28));
+        shieldClock = sub;
+        box.addView(sub);
+
+        Button back = new Button(this);
+        back.setText("Back to timer");
+        back.setAllCaps(false);
+        back.setTextSize(15);
+        back.setTextColor(0xff142a25);
+        GradientDrawable btnBg = new GradientDrawable();
+        btnBg.setColor(0xffc3d6ad);
+        btnBg.setCornerRadius(dp(18));
+        back.setBackground(btnBg);
+        back.setPadding(dp(24), dp(14), dp(24), dp(14));
+        back.setOnClickListener(v -> {
+            lastRedirect = -1000L;
+            redirect(true);
+        });
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        box.addView(back, bp);
+
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                | WindowManager.LayoutParams.FLAG_FULLSCREEN
-                | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                | WindowManager.LayoutParams.FLAG_FULLSCREEN,
             PixelFormat.OPAQUE
         );
         params.gravity = Gravity.CENTER;
@@ -312,7 +341,6 @@ public final class BlockerService extends Service {
     }
 
     private void hideShield() {
-        handler.removeCallbacks(autoHideShield);
         if (shieldView == null) return;
         WindowManager wm = getSystemService(WindowManager.class);
         if (wm != null) {
@@ -322,6 +350,7 @@ public final class BlockerService extends Service {
             }
         }
         shieldView = null;
+        shieldClock = null;
     }
 
     private void redirect(boolean intercepted) {

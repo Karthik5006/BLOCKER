@@ -35,15 +35,19 @@ public class GuardRoutesTest {
         ResolveInfo r=new ResolveInfo();r.activityInfo=a;
         Shadows.shadowOf(c.getPackageManager()).addResolveInfoForIntent(intent,r);
     }
-    @Test public void allowsMainSettingsAndSubSettingsWhileBlockingAppDetailsAndUninstall(){
+    @Test public void allowsMainSettingsWhileBlockingSubSettingsSearchAndUninstall(){
         GuardRoutes routes=new GuardRoutes(c);
         Set<String> chosen=Set.of("com.brave.browser","android.launcher");
         assertTrue(routes.shouldBlock(true,"com.brave.browser",null,chosen));
         assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.Settings",chosen));
-        assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.SubSettings",chosen));
+        assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.homepage.SettingsHomepageActivity",chosen));
+        assertFalse(routes.shouldBlock(true,"com.android.settings","com.android.settings.Settings$WifiSettingsActivity",chosen));
+        assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.SubSettings",chosen));
+        assertTrue(routes.shouldBlock(true,"com.samsung.android.settings.intelligence","com.samsung.android.settings.search.SearchActivity",chosen));
         assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.spa.SpaActivity",chosen));
         assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.applications.InstalledAppDetails",chosen));
         assertTrue(routes.shouldBlock(true,"com.android.settings","com.android.settings.DeviceAdminAdd",chosen));
+        assertTrue(routes.shouldBlock(true,"com.google.android.packageinstaller","com.android.packageinstaller.DeleteStagedFileOnResult",chosen));
         assertTrue(routes.shouldBlock(true,"com.android.packageinstaller",null,chosen));
         assertTrue(routes.shouldBlock(true,"com.android.vending",null,chosen));
         assertTrue(routes.shouldBlock(true,"com.miui.securitycenter",null,chosen));
