@@ -1,0 +1,62 @@
+package app.blocker;
+
+import android.Manifest;
+import android.app.AppOpsManager;
+import android.content.*;
+import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Process;
+import android.provider.Settings;
+
+/** Checks Usage Access + Overlay permissions and tracks whether the blocker service is armed. */
+final class BlockingAccess {
+    static boolean disabled(Context c) {
+        return !State.prefs(c).getBoolean("serviceArmed", false);
+    }
+
+    static boolean usageEnabled(Context c) {
+        AppOpsManager ops = c.getSystemService(AppOpsManager.class);
+        if (ops == null) return false;
+        int mode = Build.VERSION.SDK_INT >= 29
+            ? ops.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), c.getPackageName())
+            : ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), c.getPackageName());
+        if (mode == AppOpsManager.MODE_DEFAULT) {
+            return c.checkCallingOrSelfPermission(Manifest.permission.PACKAGE_USAGE_STATS) == PackageManager.PERMISSION_GRANTED;
+        }
+        return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    static boolean overlayEnabled(Context c) {
+        return Settings.canDrawOverlays(c);
+    }
+
+    static boolean enabled(Context c) {
+        return usageEnabled(c) && overlayEnabled(c);
+    }
+
+    static Intent nextPermissionIntent(Context c) {
+        if (!usageEnabled(c)) {
+            return new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS);
+        }
+        return new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + c.getPackageName()));
+    }
+
+    static void prepare(Context c) {
+        if (!State.pending(c) && !State.active(c)) return;
+        State.prefs(c).edit().putBoolean("serviceArmed", true).commit();
+    }
+
+    static void disable(Context c) {
+        if (State.active(c) || State.pending(c)) return;
+        State.prefs(c).edit().putBoolean("serviceArmed", false).commit();
+    }
+
+    static void releaseRuntimePermissions(Context c) {
+        if (Build.VERSION.SDK_INT >= 33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
+            try {
+                c.revokeSelfPermissionOnKill(Manifest.permission.POST_NOTIFICATIONS);
+            } catch (SecurityException ignored) { }
+        }
+    }
+}

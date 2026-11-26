@@ -2,6 +2,7 @@ package app.blocker;
 
 import android.Manifest;
 import android.app.*;
+import android.app.admin.DevicePolicyManager;
 import android.content.*;
 import android.content.pm.PackageManager;
 import android.graphics.*;
@@ -18,6 +19,14 @@ import org.json.*;
 
 public final class MainActivity extends Activity {
     private static final int INK=0xfff4eddd,MUTED=0xffb2c2b5,PAPER=0xff142a25,GREEN=0xffc3d6ad,CARD=0xff243d34,LINE=0xff425b4e;
+    private static boolean inForeground;
+    static boolean isInForeground(){return inForeground;}
+    private static final ActionMode.Callback NO_TEXT_MENU=new ActionMode.Callback(){
+        public boolean onCreateActionMode(ActionMode mode,Menu menu){return false;}
+        public boolean onPrepareActionMode(ActionMode mode,Menu menu){return false;}
+        public boolean onActionItemClicked(ActionMode mode,MenuItem item){return false;}
+        public void onDestroyActionMode(ActionMode mode){}
+    };
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
     private FrameLayout body;
@@ -25,19 +34,23 @@ public final class MainActivity extends Activity {
     private Typeface outfit;
     private String page="block",query="";
     private List<AppCatalog.Entry> catalog=new ArrayList<>();
-    private boolean loaded,resumed,exiting,resumeExit,exitFinished;
+    private final Map<String,Drawable> iconCache=new HashMap<>();
+    private boolean loaded,resumed,exiting,resumeExit,exitFinished,overlayPrompted;
+    private long exitStarted,lastSetupLaunch=-2000L;
+    private final Runnable exitCheck=this::finishQuietExit;
     private int lastSession=-1;
 
     private Dialog setupDialog;
-    private MotionPolicy motion;private AlpineScreen preview;private boolean sheetVisible,setupPreview,catalogLoading,catalogDirty;private long blockedSignal;private AppAdapter pickerAdapter;
+    private TextView exitNote;
+    private MotionPolicy motion;private AlpineScreen preview;private boolean sheetVisible,setupPreview,catalogLoading,catalogDirty,uninstallRequested;private long blockedSignal;private AppAdapter pickerAdapter;
     private final Set<Dialog> nativeDialogs=new HashSet<>();
-    private final BroadcastReceiver packages=new BroadcastReceiver(){public void onReceive(Context c,Intent i){refreshCatalog();}};
+    private final BroadcastReceiver packages=new BroadcastReceiver(){public void onReceive(Context c,Intent i){iconCache.clear();refreshCatalog();}};
     private boolean animations(){return motion!=null&&motion.allowed();}
     private void stopViewMotion(View v){v.animate().cancel();v.clearAnimation();v.setStateListAnimator(null);v.jumpDrawablesToCurrentState();if(v.getBackground() instanceof RippleDrawable){RippleDrawable r=(RippleDrawable)v.getBackground();if(r.getNumberOfLayers()>0)v.setBackground(r.getDrawable(0));}if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)stopViewMotion(((ViewGroup)v).getChildAt(i));}
     private void applyMotion(){boolean allowed=animations();if(web!=null)web.setMotionAllowed(allowed&&!sheetVisible&&!exiting);if(preview!=null)preview.setMotionAllowed(allowed);for(Dialog d:nativeDialogs)if(d.getWindow()!=null){d.getWindow().setWindowAnimations(allowed?(centeredDialogs.contains(d)?R.style.QuietDialogMotion:R.style.QuietSheetMotion):0);if(!allowed)stopViewMotion(d.getWindow().getDecorView());}}
     private void refreshCatalog(){if(executor.isShutdown())return;if(catalogLoading){catalogDirty=true;return;}catalogLoading=true;executor.execute(()->{List<AppCatalog.Entry> entries=AppCatalog.load(getApplicationContext());handler.post(()->{catalogLoading=false;if(isDestroyed())return;catalog=entries;loaded=true;if(pickerAdapter!=null)pickerAdapter.notifyDataSetChanged();if(resumed&&!exiting&&(web==null||!web.holding()))render();if(catalogDirty){catalogDirty=false;refreshCatalog();}});});}
     private void nativeSheetShown(Dialog d){setupDialog=d;nativeDialogs.add(d);sheetVisible=true;applyMotion();}
-    private void nativeSheetClosed(Dialog closed){nativeDialogs.remove(closed);sheetVisible=!nativeDialogs.isEmpty();if(closed==setupDialog){setupPreview=false;pickerAdapter=null;if(preview!=null){preview.destroy();preview=null;}}applyMotion();if(resumed&&!exiting)render();}
+    private void nativeSheetClosed(Dialog closed){nativeDialogs.remove(closed);sheetVisible=!nativeDialogs.isEmpty();if(!sheetVisible)exitNote=null;if(closed==setupDialog){setupPreview=false;pickerAdapter=null;if(preview!=null){preview.destroy();preview=null;}}applyMotion();if(resumed&&!exiting)render();}
     private void scheduleTick(){handler.removeCallbacks(ticker);if(!resumed||exiting)return;if(State.active(this)||(page.equals("pause")&&pauseLeft()>0))handler.postDelayed(ticker,1000);else if(State.pending(this))handler.postDelayed(ticker,Math.max(1,State.prefs(this).getLong("setupAt",0)+600000-SystemClock.elapsedRealtime()));}
 
     private final Runnable ticker=new Runnable() {
@@ -54,27 +67,38 @@ public final class MainActivity extends Activity {
         State.restoreClock(this);
         getWindow().setStatusBarColor(PAPER);getWindow().setNavigationBarColor(PAPER);
         Notices.channels(this);Notices.schedule(this);
-        if(saved!=null){page=saved.getString("page","block");resumeExit=saved.getBoolean("exitPending",false);}
+        if(saved!=null){page=saved.getString("page","block");resumeExit=saved.getBoolean("exitPending",false);uninstallRequested=saved.getBoolean("uninstallPending",false);}
         if(State.prefs(this).getBoolean("showComplete",false)&&!State.active(this))page="complete";
         if(getIntent()!=null&&getIntent().getBooleanExtra("blocked",false)){getIntent().removeExtra("blocked");page="block";blockedSignal=SystemClock.elapsedRealtime();}
         render();
         refreshCatalog();
     }
-    @Override protected void onSaveInstanceState(Bundle state){state.putString("page",page);state.putBoolean("exitPending",exiting);super.onSaveInstanceState(state);}
+    @Override protected void onSaveInstanceState(Bundle state){state.putString("page",page);state.putBoolean("exitPending",exiting);state.putBoolean("uninstallPending",uninstallRequested);super.onSaveInstanceState(state);}
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);setIntent(intent);
-        if(intent!=null&&intent.getBooleanExtra("blocked",false)){intent.removeExtra("blocked");page="block";blockedSignal=SystemClock.elapsedRealtime();if(resumed)render();}
+        if(intent!=null&&intent.getBooleanExtra("blocked",false)){intent.removeExtra("blocked");for(Dialog dialog:new ArrayList<>(nativeDialogs))dialog.dismiss();exitNote=null;page="block";blockedSignal=SystemClock.elapsedRealtime();if(resumed)render();}
     }
     @Override protected void onResume() {
-        super.onResume();resumed=true;motion.foreground(true);if(web!=null){web.resumeTimers();web.onResume();}if(preview!=null)preview.onResume();refreshCatalog();
-        if(State.expired(this)){State.finishSession(this);page="complete";}
-        if (State.pending(this) && enabled()) State.startLauncherSession(this);
+        super.onResume();resumed=true;inForeground=true;BlockerService.onMainActivityResumed();motion.foreground(true);if(web!=null){web.resumeTimers();web.onResume();}if(preview!=null)preview.onResume();refreshCatalog();
+        if(State.expired(this)){BlockerService.complete(this);page="complete";}
+        if(State.pending(this)&&(State.prefs(this).getBoolean("managedSession",false)||UninstallGuard.adminActive(this))){
+            if(enabled()){
+                overlayPrompted=false;
+                BlockerService.connectPending(this);
+            } else if(BlockingAccess.usageEnabled(this)&&!BlockingAccess.overlayEnabled(this)&&!overlayPrompted){
+                overlayPrompted=true;
+                openPermissions();
+            }
+        } else if(State.active(this)&&enabled()){
+            BlockerService.ensureRunning(this);
+        }
+        if(!State.active(this)&&!State.pending(this)&&(State.prefs(this).getBoolean("active",false)||State.prefs(this).getBoolean("pending",false)||UninstallGuard.active(this)||!BlockingAccess.disabled(this)))BlockerService.exit(this);
         if(resumeExit||(!State.active(this)&&State.prefs(this).getBoolean("exitAfterSession",false))){resumeExit=false;exit();return;}
         handler.removeCallbacks(ticker);handler.post(ticker);
         if(!exiting)render();else finishQuietExit();
     }
-    @Override protected void onPause(){resumed=false;motion.foreground(false);if(web!=null){web.cancelHold();web.setMotionAllowed(false);web.onPause();web.pauseTimers();}if(preview!=null)preview.onPause();handler.removeCallbacks(ticker);super.onPause();}
-    @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);executor.shutdownNow();unregisterReceiver(packages);motion.close();if(preview!=null){preview.destroy();preview=null;}if(web!=null){web.removeJavascriptInterface("BlockerUI");if(web.getParent()!=null)((ViewGroup)web.getParent()).removeView(web);web.destroy();}for(Dialog dialog:new ArrayList<>(nativeDialogs))dialog.dismiss();super.onDestroy();}
+    @Override protected void onPause(){resumed=false;inForeground=false;motion.foreground(false);if(web!=null){web.cancelHold();web.setMotionAllowed(false);web.onPause();web.pauseTimers();}if(preview!=null)preview.onPause();handler.removeCallbacks(ticker);super.onPause();}
+    @Override protected void onDestroy(){inForeground=false;handler.removeCallbacksAndMessages(null);executor.shutdownNow();unregisterReceiver(packages);motion.close();if(preview!=null){preview.destroy();preview=null;}if(web!=null){web.removeJavascriptInterface("BlockerUI");if(web.getParent()!=null)((ViewGroup)web.getParent()).removeView(web);web.destroy();}for(Dialog dialog:new ArrayList<>(nativeDialogs))dialog.dismiss();super.onDestroy();}
     @Override public void onBackPressed() {
         if(exiting)return;
         if(State.active(this)){exit();return;}
@@ -91,10 +115,18 @@ public final class MainActivity extends Activity {
     }
     private TextView text(String label,int size,int color) {
         TextView v=new TextView(this);v.setTypeface(outfit);v.setFontVariationSettings("'wght' 400");v.setText(label);v.setTextSize(size);v.setTextColor(color);
-        v.setFontFeatureSettings("tnum");v.setLineSpacing(dp(2),1);return v;
+        v.setFontFeatureSettings("tnum");v.setLineSpacing(dp(2),1);disableTextSelection(v);return v;
+    }
+    private void disableTextSelection(TextView view){
+        // Keep EditText focus, cursor and IME editing; suppress its floating text menus.
+        if(!(view instanceof EditText))view.setTextIsSelectable(false);
+        view.setLongClickable(false);
+        view.setCustomSelectionActionModeCallback(NO_TEXT_MENU);
+        view.setCustomInsertionActionModeCallback(NO_TEXT_MENU);
     }
     private Button button(String title,boolean primary,Runnable action) {
-        Button b=new Button(this);b.setText(title);b.setAllCaps(false);b.setTextSize(14);
+        Button b=new Button(this);b.setText(title);b.setAllCaps(false);b.setTextSize(14);disableTextSelection(b);
+        // Material's default state animator otherwise restores a raised shadow on press.
         b.setStateListAnimator(null);b.setElevation(0);b.setTranslationZ(0);b.setOutlineProvider(null);b.setBackgroundTintList(null);
         b.setTypeface(outfit);b.setFontVariationSettings("'wght' 500");b.setTextColor(primary?PAPER:INK);
         b.setMinWidth(0);b.setMinimumWidth(0);b.setMinHeight(dp(52));b.setMinimumHeight(dp(52));b.setGravity(Gravity.CENTER);
@@ -106,21 +138,22 @@ public final class MainActivity extends Activity {
     private void note(LinearLayout p,String label){TextView t=text(label,14,MUTED);t.setPadding(0,dp(7),0,dp(12));p.addView(t);}
     private LinearLayout column(){LinearLayout v=new LinearLayout(this);v.setOrientation(LinearLayout.VERTICAL);v.setPadding(dp(4),dp(8),dp(4),dp(4));v.setClipChildren(false);v.setClipToPadding(false);return v;}
     private EditText field(String label,String value,boolean numeric){
-        EditText f=new EditText(this);f.setTypeface(outfit);f.setFontVariationSettings("'wght' 400");f.setTextSize(16);f.setTextColor(INK);f.setHintTextColor(MUTED);f.setContentDescription(label);f.setSingleLine(true);f.setSelectAllOnFocus(true);f.setMinHeight(dp(54));f.setPadding(dp(16),dp(12),dp(16),dp(12));
+        EditText f=new EditText(this);f.setTypeface(outfit);f.setFontVariationSettings("'wght' 400");f.setTextSize(16);f.setTextColor(INK);f.setHintTextColor(MUTED);f.setContentDescription(label);f.setSingleLine(true);f.setSelectAllOnFocus(false);f.setMinHeight(dp(54));f.setPadding(dp(16),dp(12),dp(16),dp(12));
         if(numeric)f.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        StateListDrawable states=new StateListDrawable();GradientDrawable focus=surface(PAPER,16);focus.setStroke(dp(1),GREEN);GradientDrawable idle=surface(PAPER,16);idle.setStroke(dp(1),LINE);states.addState(new int[]{android.R.attr.state_focused},focus);states.addState(new int[]{},idle);f.setBackgroundTintList(null);f.setBackground(states);f.setText(value);return f;
+        StateListDrawable states=new StateListDrawable();GradientDrawable focus=surface(PAPER,16);focus.setStroke(dp(1),GREEN);GradientDrawable idle=surface(PAPER,16);idle.setStroke(dp(1),LINE);states.addState(new int[]{android.R.attr.state_focused},focus);states.addState(new int[]{},idle);f.setBackgroundTintList(null);f.setBackground(states);f.setText(value);disableTextSelection(f);return f;
     }
     private TextView errorLabel(LinearLayout parent){TextView v=text("",13,0xffefb8a7);v.setPadding(0,dp(8),0,dp(8));v.setVisibility(View.GONE);v.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);parent.addView(v);return v;}
     private void fieldError(TextView error,EditText input,String message){error.setText(message);error.setVisibility(View.VISIBLE);input.requestFocus();}
     private void clearErrorOnEdit(EditText input,TextView error){input.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence value,int start,int count,int after){}public void onTextChanged(CharSequence value,int start,int before,int count){}public void afterTextChanged(android.text.Editable value){error.setVisibility(View.GONE);}});}
     private void styleToggle(CompoundButton control){
+        disableTextSelection(control);
         control.setTypeface(outfit);control.setFontVariationSettings("'wght' 400");control.setTextSize(14);control.setTextColor(INK);control.setMinHeight(dp(48));control.setPadding(dp(2),dp(6),dp(2),dp(6));
         android.content.res.ColorStateList colors=new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},new int[]{GREEN,0xff839b87});
         if(control instanceof Switch){Switch s=(Switch)control;s.setShowText(false);s.setThumbTintList(colors);s.setTrackTintList(new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},new int[]{0xff8fa979,0xff6d8373}));s.setSwitchPadding(dp(16));}else control.setButtonTintList(colors);
     }
     private void showColumn(LinearLayout v){ScrollView s=new ScrollView(this);s.addView(v);body.addView(s,new FrameLayout.LayoutParams(-1,-1));}
-    private int sessionCode(){return (State.active(this)?2:State.pending(this)?1:0)+(enabled()?4:0);}
-    private boolean enabled(){return HomeActivity.isDefault(this);}
+    private int sessionCode(){return (State.active(this)?2:State.pending(this)?1:0)+(enabled()?4:0)+(UninstallGuard.active(this)?8:0)+(UninstallGuard.managedBlocked(this)?16:0);}
+    private boolean enabled(){return BlockingAccess.enabled(this);}
     private void render() {
         if(exiting)return;
         if(web==null) {
@@ -135,16 +168,16 @@ public final class MainActivity extends Activity {
         JSONObject state=new JSONObject();
         try {
             state.put("page",page);state.put("active",State.active(this));state.put("pending",State.pending(this));
-            state.put("release",false);
+            state.put("release",!State.pending(this)&&!State.active(this)&&(!BlockingAccess.disabled(this)||UninstallGuard.active(this)));
             state.put("loaded",loaded);state.put("minutes",State.prefs(this).getInt("duration",25));
             Set<String> selected=State.selected(this);
             state.put("count",catalog.stream().filter(e->!e.essential&&selected.contains(e.pkg)).count());
             boolean graphics=State.prefs(this).getBoolean("graphics",true);
-            state.put("holdDuration",State.active(this)?State.sessionHold(this):State.holdDuration(this));state.put("setup",setupPreview||State.pending(this));state.put("adminReady",enabled());state.put("accessReady",enabled());state.put("blockedSignal",blockedSignal);state.put("game",State.prefs(this).getBoolean("game",false));state.put("jar",State.prefs(this).getInt("jar",0));
+            state.put("holdDuration",State.active(this)?State.sessionHold(this):State.holdDuration(this));state.put("setup",setupPreview||State.pending(this));state.put("adminReady",UninstallGuard.adminActive(this)||UninstallGuard.managedBlocked(this));state.put("accessReady",enabled());state.put("blockedSignal",blockedSignal);state.put("game",State.prefs(this).getBoolean("game",false));state.put("jar",State.prefs(this).getInt("jar",0));
             state.put("followTime",false);state.put("scene",currentScene());state.put("graphics",graphics);
             state.put("still",!animations()||sheetVisible);
             state.put("interrupted",State.active(this)&&!enabled());
-            state.put("guardMissing",false);
+            state.put("guardMissing",State.active(this)&&!UninstallGuard.adminActive(this)&&!UninstallGuard.managedBlocked(this));
             state.put("reason",State.reason(this));state.put("step",State.step(this));
             state.put("pauseStep",State.prefs(this).getString("pauseStep",State.step(this)));state.put("paused",pauseLeft()>0);
             int[] week=State.week(this);state.put("free",week[0]);state.put("logged",week[1]);
@@ -169,7 +202,7 @@ public final class MainActivity extends Activity {
         if(!resumed||exiting)return;
         if(name.equals("exit")){exit();return;}
         if(State.active(this)) {
-            if(name.equals("restore"))HomeActivity.chooseHome(this);
+            if(name.equals("restore"))startActivity(BlockingAccess.nextPermissionIntent(this));
             return;
         }
         switch(name) {
@@ -183,11 +216,11 @@ public final class MainActivity extends Activity {
             case "log":checkIn();break;
             case "delete":deleteEntries();break;
             case "start":
-                if(State.pending(this)){HomeActivity.chooseHome(this);}
+                if(State.pending(this)){overlayPrompted=false;lastSetupLaunch=-2000L;openPermissions();}
                 else if(State.selected(this).isEmpty())picker();
                 else startBlocking();
                 break;
-            case "cancel":if(State.pending(this)){State.end(this);render();}break;
+            case "cancel":if(State.pending(this)){overlayPrompted=false;BlockerService.exit(this);render();}break;
             case "startPause":if(pauseLeft()>0){page="pause";render();}else startPause();break;
             case "returned":returned();break;
 
@@ -218,10 +251,11 @@ public final class MainActivity extends Activity {
     private void sheet(String title,LinearLayout content){
         Dialog d=new Dialog(this);LinearLayout box=popupPanel(title,true);box.addView(content,new LinearLayout.LayoutParams(-1,-2));PopupScroll scroll=new PopupScroll();scroll.setBackground(surface(CARD,26));scroll.setClipToOutline(true);scroll.addView(box);showPopup(d,scroll,true,false,-2);
     }
-    private void confirmation(String title,String message,String cancel,String confirm,Runnable action,boolean destructive){
-        Dialog d=new Dialog(this);LinearLayout box=popupPanel(title,false),form=column();note(form,message);
+    private TextView confirmation(String title,String message,String cancel,String confirm,Runnable action,boolean destructive){
+        Dialog d=new Dialog(this);LinearLayout box=popupPanel(title,false),form=column();TextView msg=text(message,14,MUTED);msg.setPadding(0,dp(7),0,dp(12));form.addView(msg);
         Button yes=button(confirm,true,()->{d.dismiss();action.run();});if(destructive){yes.setBackground(touch(0xffd9b6a6));yes.setTextColor(PAPER);}form.addView(yes);
         if(cancel!=null)form.addView(button(cancel,false,d::dismiss));box.addView(form);PopupScroll scroll=new PopupScroll();scroll.setBackground(surface(CARD,26));scroll.setClipToOutline(true);scroll.addView(box);showPopup(d,scroll,false,true,-2);
+        return msg;
     }
     private GridLayout chipGrid(int columns){GridLayout grid=new GridLayout(this);grid.setColumnCount(columns);grid.setClipChildren(false);grid.setClipToPadding(false);grid.setPadding(0,dp(3),0,dp(3));return grid;}
     private void addChip(GridLayout grid,Button b){b.setTextSize(13);b.setPadding(dp(4),dp(10),dp(4),dp(10));b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));GridLayout.LayoutParams lp=new GridLayout.LayoutParams(GridLayout.spec(GridLayout.UNDEFINED),GridLayout.spec(GridLayout.UNDEFINED,1f));lp.width=0;lp.height=-2;lp.setMargins(dp(4),dp(4),dp(4),dp(4));grid.addView(b,lp);}
@@ -231,7 +265,7 @@ public final class MainActivity extends Activity {
         EditText minutes=field("Session length in minutes",String.valueOf(State.prefs(this).getInt("duration",25)),true);minutes.setTextSize(32);minutes.setFontVariationSettings("'wght' 350");minutes.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(4)});form.addView(minutes);note(form,"Minutes · 1 to 1,439");TextView error=errorLabel(form);clearErrorOnEdit(minutes,error);
         boolean compact=getResources().getConfiguration().screenWidthDp<360||getResources().getConfiguration().fontScale>1.15f;
         GridLayout quick=chipGrid(compact?2:4);List<Button> presets=new ArrayList<>();
-        for(int value:new int[]{5,25,60,120}){Button b=button(value<60?value+" min":(value/60)+" h",false,null);presets.add(b);addChip(quick,b);b.setOnClickListener(v->{minutes.animate().cancel();minutes.setText(String.valueOf(value));minutes.setAlpha(1);error.setVisibility(View.GONE);if(animations()){minutes.setAlpha(.3f);minutes.animate().alpha(1).setDuration(250).start();}for(Button chip:presets)selectChip(chip,chip==b);});selectChip(b,value==State.prefs(this).getInt("duration",25));}form.addView(quick);
+        int[] presetValues={5,25,60,120};for(int value:presetValues){Button b=button(value<60?value+" min":(value/60)+" h",false,null);presets.add(b);addChip(quick,b);b.setOnClickListener(v->{minutes.animate().cancel();minutes.setText(String.valueOf(value));minutes.setAlpha(1);error.setVisibility(View.GONE);if(animations()){minutes.setAlpha(.3f);minutes.animate().alpha(1).setDuration(250).start();}for(Button chip:presets)selectChip(chip,chip==b);});selectChip(b,value==State.prefs(this).getInt("duration",25));}minutes.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int b,int c){}public void onTextChanged(CharSequence s,int a,int b,int c){}public void afterTextChanged(android.text.Editable s){int typed=-1;try{typed=Integer.parseInt(s.toString().trim());}catch(NumberFormatException ignored){}for(int i=0;i<presets.size();i++)selectChip(presets.get(i),presetValues[i]==typed);}});form.addView(quick);
         note(form,"Hold to end early");int[] hold={(int)(State.holdDuration(this)/60000)};GridLayout row=chipGrid(getResources().getConfiguration().fontScale>1.6f?2:3);List<Button> choices=new ArrayList<>();
         for(int value:new int[]{3,5,10}){Button b=button(value+" min",false,null);choices.add(b);addChip(row,b);b.setOnClickListener(v->{hold[0]=value;for(Button chip:choices)selectChip(chip,chip==b);});selectChip(b,hold[0]==value);}form.addView(row);note(form,"One continuous hold. Lifting, another finger, or leaving the screen resets it.");
         form.addView(button("Use these times",true,()->{int total;try{total=Integer.parseInt(minutes.getText().toString().trim());}catch(NumberFormatException bad){total=0;}if(total<1||total>1439){fieldError(error,minutes,"Choose 1 to 1,439 minutes.");return;}State.prefs(this).edit().putInt("duration",total).putInt("holdMinutes",hold[0]).apply();setupDialog.dismiss();render();}));sheet("Session length",form);
@@ -245,15 +279,21 @@ public final class MainActivity extends Activity {
         
         LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-1,-2);sp.setMargins(0,dp(11),0,dp(5));content.addView(search,sp);
         LinearLayout options=new LinearLayout(this);options.setGravity(Gravity.CENTER_VERTICAL);boolean stack=getResources().getConfiguration().screenWidthDp<360||getResources().getConfiguration().fontScale>1.15f;if(stack)options.setOrientation(LinearLayout.VERTICAL);
-
-
+        CheckBox all=new CheckBox(this);all.setText("Select all");styleToggle(all);
+        options.addView(all,stack?new LinearLayout.LayoutParams(-1,-2):new LinearLayout.LayoutParams(0,-2,1));
         Switch system=new Switch(this);system.setText("System apps");styleToggle(system);
         system.setChecked(State.prefs(this).getBoolean("includeSystem",true));options.addView(system,new LinearLayout.LayoutParams(stack?-1:-2,-2));content.addView(options);
         selectionCount=text(loaded?"":"Loading apps…",12,MUTED);selectionCount.setPadding(dp(4),dp(2),0,dp(6));content.addView(selectionCount);
         ListView list=new ListView(this);list.setSelector(new ColorDrawable(Color.TRANSPARENT));list.setCacheColorHint(Color.TRANSPARENT);
         list.setLayoutAnimation(null);list.setOverScrollMode(View.OVER_SCROLL_NEVER);list.setDivider(new ColorDrawable(Color.TRANSPARENT));list.setDividerHeight(dp(6));
         list.setVerticalScrollBarEnabled(false);LinearLayout.LayoutParams listSpace=new LinearLayout.LayoutParams(-1,0,1);listSpace.bottomMargin=dp(12);content.addView(list,listSpace);
-        AppAdapter adapter=new AppAdapter();list.setAdapter(adapter);
+        AppAdapter adapter=new AppAdapter(all);list.setAdapter(adapter);
+        all.setEnabled(loaded);all.setOnClickListener(v->{
+            Set<String> chosen=State.selected(this);
+            boolean every=catalog.stream().filter(e->!e.essential).allMatch(e->chosen.contains(e.pkg));
+            if(every)chosen.clear();else for(AppCatalog.Entry e:catalog)if(!e.essential)chosen.add(e.pkg);
+            State.select(this,chosen);adapter.notifyDataSetChanged();
+        });
         system.setOnCheckedChangeListener((v,checked)->{State.prefs(this).edit().putBoolean("includeSystem",checked).apply();adapter.notifyDataSetChanged();if(!animations())v.jumpDrawablesToCurrentState();});
         search.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence s,int start,int count,int after){}
@@ -273,15 +313,16 @@ public final class MainActivity extends Activity {
         adapter.notifyDataSetChanged();
     }
     private final class AppAdapter extends BaseAdapter {
-        private String pendingCheck;
+        private final CheckBox all;private String pendingCheck;
         private final List<AppCatalog.Entry> visible=new ArrayList<>();
-
+        AppAdapter(CheckBox all){this.all=all;}
         @Override public void notifyDataSetChanged() {
             visible.clear();boolean system=State.prefs(MainActivity.this).getBoolean("includeSystem",true);
             for(AppCatalog.Entry e:catalog)if((system||!e.system)&&(e.name+" "+e.pkg).toLowerCase(Locale.getDefault()).contains(query.toLowerCase(Locale.getDefault())))visible.add(e);
             Set<String> chosen=State.selected(MainActivity.this);
             long total=catalog.stream().filter(e->!e.essential&&chosen.contains(e.pkg)).count();
-            selectionCount.setText(loaded?total+" selected":"Loading apps…");super.notifyDataSetChanged();
+            all.setChecked(catalog.stream().anyMatch(e->!e.essential)&&catalog.stream().filter(e->!e.essential).allMatch(e->chosen.contains(e.pkg)));
+            if(!animations())all.jumpDrawablesToCurrentState();selectionCount.setText(loaded?total+" selected · All includes system + installed":"Loading apps…");super.notifyDataSetChanged();
         }
         @Override public int getCount(){return visible.size();}
         @Override public Object getItem(int p){return visible.get(p);}
@@ -299,7 +340,7 @@ public final class MainActivity extends Activity {
                 TextView check=text("",20,GREEN);check.setGravity(Gravity.CENTER);row.addView(check,new LinearLayout.LayoutParams(dp(32),dp(40)));
             }
             ImageView icon=(ImageView)row.getChildAt(0);
-            try {icon.setImageDrawable(getPackageManager().getApplicationIcon(e.pkg));}catch(PackageManager.NameNotFoundException ex){icon.setImageDrawable(getDrawable(R.drawable.ic_blocker));}
+            Drawable cached=iconCache.get(e.pkg);if(cached==null){try{cached=getPackageManager().getApplicationIcon(e.pkg);}catch(PackageManager.NameNotFoundException ex){cached=getDrawable(R.drawable.ic_blocker);}if(cached!=null)iconCache.put(e.pkg,cached);}icon.setImageDrawable(cached);
             LinearLayout labels=(LinearLayout)row.getChildAt(1);
             ((TextView)labels.getChildAt(0)).setText(e.name);
             ((TextView)labels.getChildAt(1)).setText(e.essential?"Essential · stays available":e.system?"System app":"Installed app");
@@ -323,13 +364,17 @@ public final class MainActivity extends Activity {
     private void finishPause(){State.prefs(this).edit().remove("pauseEnd").apply();page="home";render();}
     private void updatePreview(){if(preview==null)return;JSONObject state=new JSONObject();try{state.put("preview",true);state.put("scene","Dusk");state.put("still",!animations());}catch(JSONException e){throw new IllegalStateException(e);}preview.update(state);preview.setMotionAllowed(animations());}
     private void plan(){
-        LinearLayout form=column();preview=new AlpineScreen(this,ignored->{},this::updatePreview,()->{});preview.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);form.addView(preview,new LinearLayout.LayoutParams(-1,dp(145)));updatePreview();
-        Switch graphics=new Switch(this);graphics.setText("Animated landscape");styleToggle(graphics);graphics.setChecked(State.prefs(this).getBoolean("graphics",true));form.addView(graphics);graphics.setOnCheckedChangeListener((v,on)->{State.prefs(this).edit().putBoolean("graphics",on).apply();applyMotion();updatePreview();});note(form,"Motion also rests in Battery Saver, with system animations off, and when BLOCKER is out of view.");
-        Switch game=new Switch(this);game.setText("Firefly jar on Home");styleToggle(game);game.setChecked(State.prefs(this).getBoolean("game",false));form.addView(game);game.setOnCheckedChangeListener((v,on)->{State.prefs(this).edit().putBoolean("game",on).apply();if(!animations())v.jumpDrawablesToCurrentState();});
+        LinearLayout form=column();
         EditText reason=field("My reason",State.reason(this),false),step=field("My next step",State.step(this),false);step.setSingleLine(false);step.setMinLines(2);step.setMaxLines(3);note(form,"My reason");form.addView(reason);TextView reasonError=errorLabel(form);note(form,"My next step");form.addView(step);TextView stepError=errorLabel(form);clearErrorOnEdit(reason,reasonError);clearErrorOnEdit(step,stepError);
         CheckBox remind=new CheckBox(this);remind.setText("Remind me each day");styleToggle(remind);remind.setChecked(State.prefs(this).getBoolean("remind",false));remind.setOnCheckedChangeListener((v,on)->{if(!animations())v.jumpDrawablesToCurrentState();});form.addView(remind);int[] time={State.prefs(this).getInt("hour",22),State.prefs(this).getInt("minute",30)};
-        Button timeButton=button(reminderLabel(time),false,null);timeButton.setOnClickListener(v->reminderTime(time,timeButton));form.addView(timeButton);note(form,"Landscape and jar preferences save immediately.");
-        form.addView(button("Save my plan",true,()->{String r=reason.getText().toString().trim(),next=step.getText().toString().trim();if(r.isEmpty()){fieldError(reasonError,reason,"Add your reason.");return;}if(next.isEmpty()){fieldError(stepError,step,"Choose a next step.");return;}State.prefs(this).edit().putString("reason",r).putString("step",next).putBoolean("remind",remind.isChecked()).putBoolean("alertsPaused",false).putInt("hour",time[0]).putInt("minute",time[1]).apply();if(remind.isChecked())notificationPermission();Notices.schedule(this);setupDialog.dismiss();render();}));sheet("My plan & landscape",form);
+        Button timeButton=button(reminderLabel(time),false,null);timeButton.setOnClickListener(v->reminderTime(time,timeButton));form.addView(timeButton);
+        Dialog planDialog=new Dialog(this);
+        Button saveBtn=button("Save my plan",true,()->{String r=reason.getText().toString().trim(),next=step.getText().toString().trim();if(r.isEmpty()){fieldError(reasonError,reason,"Add your reason.");return;}if(next.isEmpty()){fieldError(stepError,step,"Choose a next step.");return;}State.prefs(this).edit().putString("reason",r).putString("step",next).putBoolean("remind",remind.isChecked()).putBoolean("alertsPaused",false).putInt("hour",time[0]).putInt("minute",time[1]).apply();if(remind.isChecked())notificationPermission();Notices.schedule(this);planDialog.dismiss();render();});
+        LinearLayout panel=popupPanel("My plan",true);
+        PopupScroll scroll=new PopupScroll();scroll.addView(form);
+        LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-1,0,1);sp.bottomMargin=dp(10);
+        panel.addView(scroll,sp);panel.addView(saveBtn);
+        showPopup(planDialog,panel,true,false,-2);
     }
     private String reminderLabel(int[] time){return String.format(Locale.getDefault(),"Reminder · %02d:%02d",time[0],time[1]);}
     private void reminderTime(int[] time,Button label){
@@ -345,8 +390,13 @@ public final class MainActivity extends Activity {
     }
     private void permissions() {
         LinearLayout content=column();
-        note(content,"Choose BLOCKER as your Home app to pause selected distractions when you open them from Home. Notifications, links and Recents can still open them.");
-        content.addView(button("Choose Home app",false,()->HomeActivity.chooseHome(this)));
+        note(content,"Blocking runs in a foreground service only while a session is active.");
+        note(content,"Usage & overlay access · "+(enabled()?"Enabled":State.pending(this)?"Waiting for setup":"Asked when you start"));
+        content.addView(button(State.pending(this)?"Finish access setup":"About blocking access",false,()->{
+            setupDialog.dismiss();
+            if(State.pending(this)){lastSetupLaunch=-2000L;openPermissions();}
+            else confirmation("Blocking access","During a session, BLOCKER detects when you open a selected app and returns you to the timer. Android App info stays available.",null,"Got it",()->{},false);
+        }));
         boolean alerts=getSystemService(NotificationManager.class).areNotificationsEnabled();
         content.addView(button("Session alerts · "+(alerts?"On":"Off")+"    ›",false,()->{
             setupDialog.dismiss();
@@ -354,49 +404,94 @@ public final class MainActivity extends Activity {
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},10);
             else startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,getPackageName()));
         }));
-        content.addView(button("Android app info",false,()->startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.fromParts("package",getPackageName(),null)))));content.addView(button("Done",true,()->setupDialog.dismiss()));sheet("Session setup",content);
+        note(content,protectionExplanation());
+        note(content,"The foreground monitoring service stops at session expiry or after the full chosen continuous hold.");
+        content.addView(button("Uninstall BLOCKER",false,()->{setupDialog.dismiss();confirmUninstall();}));content.addView(button("Done",true,()->setupDialog.dismiss()));sheet("Session setup",content);
+    }
+    private boolean managedAvailable(){return UninstallGuard.owner(this)||UninstallGuard.delegated(this)||UninstallGuard.managedBlocked(this);}
+    private String protectionExplanation(){
+        return managedAvailable()?"Managed session. The timer starts only after Android confirms the uninstall policy.":
+            "Device admin must be active before the timer starts. If you try to deactivate BLOCKER during a session, it asks you to return to the timer.";
     }
     private void startBlocking() {
-        if (State.active(this) || State.pending(this)) return;
-        Set<String> selected = State.selected(this);
-        selected.removeAll(AppCatalog.essential(this));
-        if (selected.isEmpty()) { toast("Choose at least one distraction first."); return; }
-        State.select(this, selected);
-        State.prepare(this, State.prefs(this).getInt("duration",25));
-        if (enabled()) State.startLauncherSession(this);
-        else HomeActivity.chooseHome(this);
-        render();
+        if(State.active(this)||State.pending(this))return;
+        Set<String> chosen=State.selected(this);chosen.removeAll(AppCatalog.essential(this));
+        if(chosen.isEmpty()){toast("Select at least one app first.");return;}
+        int minutes=State.prefs(this).getInt("duration",25);
+        boolean managed=managedAvailable();
+        overlayPrompted=false;
+        lastSetupLaunch=-2000L;
+        State.prefs(this).edit().putBoolean("managedSession",managed).apply();
+        State.select(this,chosen);State.prepare(this,minutes);render();
+        if(!managed&&!UninstallGuard.adminActive(this))requestGuard();
+        else openPermissions();
     }
-
+    private void requestGuard() {
+        Intent request=new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+            .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN,UninstallGuard.component(this))
+            .putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION,"Android requires deactivation before uninstalling. BLOCKER releases this guard after the session ends or you complete the chosen continuous hold.");
+        try {startActivityForResult(request,20);}
+        catch(ActivityNotFoundException error){cancelUnprotectedSetup();}
+    }
+    @Override protected void onActivityResult(int request,int result,Intent data) {
+        super.onActivityResult(request,result,data);
+        if(request==20&&State.pending(this)) {
+            if(UninstallGuard.adminActive(this))openPermissions();
+            else if(result==RESULT_OK)handler.postDelayed(()->{if(UninstallGuard.adminActive(this))openPermissions();else cancelUnprotectedSetup();},150);
+            else cancelUnprotectedSetup();
+        }
+    }
+    private void cancelUnprotectedSetup(){BlockerService.exit(this);render();web.event("setup-failed");LinearLayout form=column();note(form,"Android did not confirm the guard. Your session has not started.");form.addView(button("Go back",true,()->setupDialog.dismiss()));sheet("Setup wasn’t completed",form);if(animations())form.startAnimation(android.view.animation.AnimationUtils.loadAnimation(this,R.anim.failure_shake));}
+    private void openPermissions() {
+        if(!State.pending(this))return;
+        if(!State.prefs(this).getBoolean("managedSession",false)&&!UninstallGuard.adminActive(this)){requestGuard();return;}
+        BlockingAccess.prepare(this);
+        if(enabled()) {
+            BlockerService.connectPending(this);render();
+        } else {
+            long now=SystemClock.elapsedRealtime();
+            if(now-lastSetupLaunch<900L)return;
+            lastSetupLaunch=now;
+            try {startActivity(BlockingAccess.nextPermissionIntent(this));}
+            catch(ActivityNotFoundException e){toast("Enable Usage Access and Display over other apps in Android Settings.");}
+        }
+    }
     private void updateTimers() {
-        if(State.expired(this)){State.finishSession(this);page="complete";}else if(State.prefs(this).getBoolean("pending",false)&&!State.pending(this))State.end(this);
+        if(State.expired(this)){BlockerService.complete(this);page="complete";}else if(State.prefs(this).getBoolean("pending",false)&&!State.pending(this))BlockerService.exit(this);
         if(!State.active(this)&&State.prefs(this).getBoolean("exitAfterSession",false)&&!exiting){exit();return;}
         if(!State.active(this)&&State.prefs(this).getBoolean("showComplete",false)&&(lastSession&2)!=0)page="complete";
         int phase=State.active(this)?2:State.pending(this)?1:0;
         if(phase!=(lastSession&3)&&!exiting){render();return;}
         if(web!=null&&!exiting&&(State.active(this)||page.equals("pause"))) {
-            long full=Math.max(0,State.prefs(this).getLong("sessionEnd",0)-SystemClock.elapsedRealtime());
+            long full=State.remaining(this);
             if(State.active(this)&&web.checkCompletion())return;
             web.times(full,web.holdLeft(),pauseLeft());
+            if(exitNote!=null&&State.active(this))exitNote.setText("Wait for the timer ("+State.clock(full)+" remaining), or keep one finger inside the circle for "+(State.sessionHold(this)/60000)+" continuous minutes to exit.");
         }
     }
-    private void finishHeldSession(){if(!resumed||!State.active(this)||exiting)return;State.finishSession(this);exit();}
+    private void finishHeldSession(){if(!resumed||!State.active(this)||exiting)return;BlockerService.complete(this);exit();}
+    private void confirmUninstall(){if(State.active(this)){toast("Finish the session or your hold first.");return;}confirmation("Uninstall BLOCKER?","BLOCKER will stop its service and release its guard, then open Android’s uninstall confirmation. Uninstalling removes your local plan and history.","Keep BLOCKER","Continue",()->{uninstallRequested=true;exit();},true);}
     private void exit(){
-        if(State.expired(this))State.finishSession(this);
+        if(State.expired(this))BlockerService.complete(this);
         if(State.active(this)){
             State.prefs(this).edit().putBoolean("exitAfterSession",true).apply();page="block";render();
-            confirmation("Session in progress","Wait for the timer ("+State.clock(State.remaining(this))+" remaining), or keep one finger inside the circle for "+(State.sessionHold(this)/60000)+" continuous minutes to exit.",null,"Back to timer",()->{},false);return;
+            if(exitNote!=null)return;
+            exitNote=confirmation("Session in progress","Wait for the timer ("+State.clock(State.remaining(this))+" remaining), or keep one finger inside the circle for "+(State.sessionHold(this)/60000)+" continuous minutes to exit.",null,"Back to timer",()->{exitNote=null;},false);return;
         }
-        if(exiting)return;exiting=true;handler.removeCallbacks(ticker);
+        if(exiting)return;exiting=true;exitStarted=SystemClock.elapsedRealtime();handler.removeCallbacks(ticker);
         if(web!=null){web.cancelHold();web.setMotionAllowed(false);web.onPause();web.pauseTimers();}
         for(Dialog dialog:new ArrayList<>(nativeDialogs))dialog.dismiss();
         State.prefs(this).edit().putBoolean("exitAfterSession",false).putBoolean("showComplete",false).apply();
-        State.end(this);Notices.quietExit(this);finishQuietExit();
+        BlockerService.exit(this);Notices.quietExit(this);finishQuietExit();
     }
     private void finishQuietExit(){
         if(!exiting||exitFinished||isDestroyed()||isFinishing())return;
-        exitFinished=true;
-        finishAndRemoveTask();
+        handler.removeCallbacks(exitCheck);
+        boolean released=BlockingAccess.disabled(this)&&!UninstallGuard.active(this);
+        if(!released&&SystemClock.elapsedRealtime()-exitStarted<3000){BlockerService.exit(this);handler.postDelayed(exitCheck,250);return;}
+        exitFinished=true;BlockingAccess.disable(this);
+        if(uninstallRequested)try{startActivity(new Intent(Intent.ACTION_DELETE,android.net.Uri.parse("package:"+getPackageName())));}catch(ActivityNotFoundException ignored){}
+        BlockingAccess.releaseRuntimePermissions(this);finishAndRemoveTask();
     }
     private void notificationPermission() {
         if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)

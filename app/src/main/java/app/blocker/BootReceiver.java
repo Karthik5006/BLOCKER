@@ -6,11 +6,11 @@ public final class BootReceiver extends BroadcastReceiver {
         State.restoreClock(c);
         if (State.active(c)) {
             Notices.sessionAlarm(c);
-            Notices.session(c);
+            BlockerService.ensureRunning(c);
         } else if (State.expired(c)) {
-            State.finishSession(c);
+            BlockerService.complete(c);
         } else {
-            State.end(c);
+            BlockerService.exit(c);
         }
         Notices.schedule(c);
     }

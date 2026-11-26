@@ -1,5 +1,5 @@
 package app.blocker;
-import android.app.role.RoleManager;
+import android.app.admin.DevicePolicyManager;
 import android.content.Intent;
 import android.provider.Settings;
 import android.widget.Button;
@@ -13,27 +13,26 @@ import org.robolectric.util.ReflectionHelpers;
 import static org.robolectric.util.ReflectionHelpers.ClassParameter.from;
 import static org.junit.Assert.*;
 
-@RunWith(RobolectricTestRunner.class) @Config(sdk=35)
+@RunWith(RobolectricTestRunner.class) @Config(sdk=35,shadows=StateGuardTest.Policy.class)
 public class SimpleStartTest {
  @Before public void setup(){
   State.prefs(RuntimeEnvironment.getApplication()).edit().clear().commit();
+  StateGuardTest.Policy.admin=StateGuardTest.Policy.owner=StateGuardTest.Policy.delegated=StateGuardTest.Policy.blocked=false;
+  StateGuardTest.Policy.deny=StateGuardTest.Policy.denyRead=StateGuardTest.Policy.failApply=false;
  }
- @Test public void startWaitsForHomeRoleAndContinuesAfterSelection(){
+ @Test public void startAsksAndroidDirectlyAndWaitsForPermissions(){
   try(ActivityController<MainActivity> controller=Robolectric.buildActivity(MainActivity.class).setup()){
    MainActivity a=controller.get();State.select(a,Set.of("com.brave.browser"));
-   org.robolectric.shadows.ShadowRoleManager roles=Shadows.shadowOf(a.getSystemService(RoleManager.class));
-   roles.addAvailableRole(RoleManager.ROLE_HOME);
    ReflectionHelpers.callInstanceMethod(a,"startBlocking");
    assertTrue(State.pending(a));assertFalse(State.active(a));
    assertNull(ReflectionHelpers.getField(a,"setupDialog"));
    Intent request=Shadows.shadowOf(a).getNextStartedActivityForResult().intent;
-   assertTrue(Settings.ACTION_HOME_SETTINGS.equals(request.getAction()) ||
-       "android.app.role.action.REQUEST_ROLE".equals(request.getAction()));
+   assertEquals(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN,request.getAction());
+   assertEquals(UninstallGuard.component(a),request.getParcelableExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN));
+   StateGuardTest.Policy.admin=true;
+   ReflectionHelpers.callInstanceMethod(a,"onActivityResult",from(int.class,20),from(int.class,-1),from(Intent.class,null));
+   assertEquals(Settings.ACTION_USAGE_ACCESS_SETTINGS,Shadows.shadowOf(a).getNextStartedActivity().getAction());
    assertFalse(State.active(a));
-   roles.addHeldRole(RoleManager.ROLE_HOME);
-   controller.pause().resume();
-   assertTrue(State.active(a));
-   assertFalse(State.pending(a));
   }
  }
  @Test public void allNativeButtonsStayFlatWhenPressedAndSelected(){

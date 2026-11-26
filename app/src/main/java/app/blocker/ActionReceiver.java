@@ -2,8 +2,16 @@ package app.blocker;
 import android.content.*;
 public final class ActionReceiver extends BroadcastReceiver {
     @Override public void onReceive(Context c, Intent intent) {
+        if (intent == null) return;
         State.restoreClock(c);
-        if ("session-end".equals(intent.getAction()) && (State.expired(c) || (State.prefs(c).getBoolean("pending",false)&&!State.pending(c)))) {if(State.expired(c))State.finishSession(c);else State.end(c);}
-        if ("remind".equals(intent.getAction())) Notices.remind(c);
+        String action = intent.getAction();
+        if ("session-end".equals(action) && (State.expired(c) || (State.prefs(c).getBoolean("pending", false) && !State.pending(c)))) {
+            if (State.expired(c)) BlockerService.complete(c);
+            else BlockerService.exit(c);
+        } else if ("keep-alive".equals(action) && State.active(c)) {
+            BlockerService.ensureRunning(c);
+        } else if ("remind".equals(action)) {
+            Notices.remind(c);
+        }
     }
 }

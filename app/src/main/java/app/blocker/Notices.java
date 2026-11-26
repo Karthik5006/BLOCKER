@@ -15,7 +15,19 @@ final class Notices {
         else return;
         c.getSystemService(AlarmManager.class).setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,end,endIntent(c));
     }
-    static void cancelSessionAlarm(Context c) { c.getSystemService(AlarmManager.class).cancel(endIntent(c)); }
+    private static PendingIntent keepAliveIntent(Context c) {
+        return PendingIntent.getBroadcast(c, 5, new Intent(c, ActionReceiver.class).setAction("keep-alive"), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+    static void keepAlive(Context c) {
+        if (!State.active(c)) return;
+        long at = android.os.SystemClock.elapsedRealtime() + 1000L;
+        c.getSystemService(AlarmManager.class).setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, keepAliveIntent(c));
+    }
+    static void cancelSessionAlarm(Context c) {
+        AlarmManager am = c.getSystemService(AlarmManager.class);
+        am.cancel(endIntent(c));
+        am.cancel(keepAliveIntent(c));
+    }
 
     static final int SESSION = 40;
     static void channels(Context c) {

@@ -11,6 +11,8 @@ final class AlpineScreen extends WebView {
  }};
  AlpineScreen(Activity activity,Consumer<String> actions,Runnable didLoad,Runnable completedHold){
   super(activity);this.completedHold=completedHold;setBackgroundColor(0xff142a25);setFilterTouchesWhenObscured(true);WebSettings s=getSettings();s.setJavaScriptEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setBlockNetworkLoads(true);s.setMediaPlaybackRequiresUserGesture(true);
+  // Long presses belong to our native hold gesture, never WebView text selection.
+  setOnLongClickListener(v->true);setLongClickable(false);
   addJavascriptInterface(new Object(){
    @JavascriptInterface public void ringBounds(double l,double t,double r,double b){activity.runOnUiThread(()->{
     if(!Double.isFinite(l)||!Double.isFinite(t)||!Double.isFinite(r)||!Double.isFinite(b)||l<0||t<0||r>1||b>1||r<=l||b<=t){left=top=right=bottom=0;cancelHold();return;}
@@ -22,6 +24,8 @@ final class AlpineScreen extends WebView {
   if(htmlCache==null)htmlCache=asset(activity,"alpine.html").replace("<!--VALLEY-->",asset(activity,"valley.svg")).replace("/*NATURAL_CSS*/",asset(activity,"natural.css")).replace("/*NATURAL_JS*/",asset(activity,"natural.js"));
   loadDataWithBaseURL("https://blocker.invalid/",htmlCache,"text/html","UTF-8",null);
  }
+ @Override public ActionMode startActionMode(ActionMode.Callback callback){return null;}
+ @Override public ActionMode startActionMode(ActionMode.Callback callback,int type){return null;}
  private static String asset(Activity a,String name){try(BufferedReader r=new BufferedReader(new InputStreamReader(a.getAssets().open(name),StandardCharsets.UTF_8))){StringBuilder out=new StringBuilder();String line;while((line=r.readLine())!=null)out.append(line).append('\n');return out.toString();}catch(IOException e){throw new IllegalStateException(name,e);}}
  void update(JSONObject s){sessionActive=s.optBoolean("active",false);long duration=s.optLong("holdDuration",300000);if(duration!=hold.duration())hold.duration(duration);if(!sessionActive)cancelHold(false);if(ready)evaluateJavascript("screenState(JSON.parse("+JSONObject.quote(s.toString())+"))",null);}
  void setMotionAllowed(boolean allowed){motionAllowed=allowed;if(ready)evaluateJavascript("setMotion("+allowed+")",null);}

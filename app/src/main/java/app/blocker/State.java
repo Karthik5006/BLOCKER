@@ -19,17 +19,6 @@ final class State {
             SystemClock.elapsedRealtime() - prefs(c).getLong("setupAt", 0) < 600_000L;
     }
     static void restoreClock(Context c) {
-        // Selections from older versions may have been made with Select all.
-        // Start launcher sessions only after the user chooses distractions again.
-        if (!prefs(c).getBoolean("launcherInitialized", false)) {
-            if (prefs(c).contains("apps") || prefs(c).getBoolean("pending", false)
-                    || prefs(c).getBoolean("active", false)) {
-                stop(c);
-                Notices.cancelSessionAlarm(c);
-                c.getSystemService(android.app.NotificationManager.class).cancel(Notices.SESSION);
-            }
-            prefs(c).edit().putBoolean("launcherInitialized", true).commit();
-        }
         if (!prefs(c).getBoolean("active",false)) return;
         if (sameBoot(c)) {
             if(!prefs(c).contains("wallEnd")) {
@@ -56,16 +45,10 @@ final class State {
         Notices.sessionAlarm(c);
     }
     static void activate(Context c) {
-        if(!pending(c)) return;
+        if(!pending(c) || !UninstallGuard.acquire(c)) return;
         long end=SystemClock.elapsedRealtime()+prefs(c).getInt("duration",25)*60_000L;
         prefs(c).edit().putBoolean("pending",false).putBoolean("active",true).putLong("sessionEnd",end)
             .putLong("wallEnd",System.currentTimeMillis()+prefs(c).getInt("duration",25)*60_000L).commit();
-    }
-    static void startLauncherSession(Context c) {
-        if (!pending(c)) return;
-        activate(c);
-        Notices.sessionAlarm(c);
-        Notices.session(c);
     }
     static void stop(Context c) {
         prefs(c).edit().putBoolean("active",false).putBoolean("pending",false)
@@ -73,21 +56,12 @@ final class State {
     }
     static long holdDuration(Context c){int m=prefs(c).getInt("holdMinutes",5);return (m==3||m==10?m:5)*60000L;}
     static long sessionHold(Context c){long n=prefs(c).getLong("sessionHold",300000);return n==180000||n==600000?n:300000;}
-    static void end(Context c) {
-        stop(c);
-        Notices.cancelSessionAlarm(c);
-        c.getSystemService(android.app.NotificationManager.class).cancel(Notices.SESSION);
-    }
-    static void finishSession(Context c) {
-        completed(c);
-        end(c);
-    }
     static void completed(Context c){
         if(!prefs(c).getBoolean("active",false)||prefs(c).getBoolean("sessionRecorded",false))return;
         String key="sessions_"+LocalDate.now();prefs(c).edit().putInt(key,prefs(c).getInt(key,0)+1).putBoolean("showComplete",true).putBoolean("sessionRecorded",true).commit();
     }
-    static Set<String> selected(Context c) { return new HashSet<>(prefs(c).getStringSet("launcherApps",Collections.emptySet())); }
-    static void select(Context c,Set<String> set) { prefs(c).edit().putStringSet("launcherApps",new HashSet<>(set)).apply(); }
+    static Set<String> selected(Context c) { return new HashSet<>(prefs(c).getStringSet("apps",Collections.emptySet())); }
+    static void select(Context c,Set<String> set) { prefs(c).edit().putStringSet("apps",new HashSet<>(set)).apply(); }
     static String reason(Context c) { return prefs(c).getString("reason","I want my evenings back."); }
     static String step(Context c) { return prefs(c).getString("step","Charge my phone in the kitchen."); }
     static String clock(long ms) { return Deadline.display(ms,false); }

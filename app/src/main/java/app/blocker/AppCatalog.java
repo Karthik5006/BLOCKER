@@ -18,21 +18,12 @@ final class AppCatalog {
         Set<String> safe = new HashSet<>(Arrays.asList(c.getPackageName(), "android",
             "com.android.systemui", "com.android.phone", "com.android.server.telecom",
             "com.android.emergency", "com.android.permissioncontroller", "com.google.android.permissioncontroller"));
-        // Shared system screens stay available even with selections saved by an older build.
-        safe.add("com.android.settings");
-        safe.add("com.samsung.android.settings.intelligence");
-        android.net.Uri target = android.net.Uri.fromParts("package", c.getPackageName(), null);
-        for (Intent intent : Arrays.asList(new Intent(Settings.ACTION_SETTINGS),
-                new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, target),
-                new Intent(Intent.ACTION_UNINSTALL_PACKAGE, target),
-                new Intent(Intent.ACTION_DELETE, target))) {
-            for (ResolveInfo handler : c.getPackageManager().queryIntentActivities(intent, PackageManager.MATCH_SYSTEM_ONLY)) {
-                if (handler.activityInfo != null) safe.add(handler.activityInfo.packageName);
+        Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
+        for (ResolveInfo r : c.getPackageManager().queryIntentActivities(home, PackageManager.MATCH_DEFAULT_ONLY)) {
+            if (r.activityInfo != null && !"com.android.settings".equals(r.activityInfo.packageName)) {
+                safe.add(r.activityInfo.packageName);
             }
         }
-        Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
-        for (ResolveInfo r : c.getPackageManager().queryIntentActivities(home, PackageManager.MATCH_DEFAULT_ONLY))
-            safe.add(r.activityInfo.packageName);
         String keyboard = Settings.Secure.getString(c.getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
         if (keyboard != null) {
             ComponentName component = ComponentName.unflattenFromString(keyboard);
@@ -41,7 +32,7 @@ final class AppCatalog {
         TelecomManager tm = c.getSystemService(TelecomManager.class);
         if (tm != null && tm.getDefaultDialerPackage() != null) safe.add(tm.getDefaultDialerPackage());
         for (ResolveInfo r : c.getPackageManager().queryIntentActivities(new Intent("android.intent.action.EMERGENCY_DIAL"), 0))
-            if(r.activityInfo != null) safe.add(r.activityInfo.packageName);
+            if (r.activityInfo != null) safe.add(r.activityInfo.packageName);
         return safe;
     }
     static List<Entry> load(Context c) {
