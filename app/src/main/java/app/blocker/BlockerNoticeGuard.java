@@ -5,7 +5,7 @@ import android.provider.Settings;
 import android.service.notification.*;
 import java.util.Set;
 
-/** Optional listener that silently dismisses notifications from blocked apps during active sessions. */
+/** Optional listener that snoozes notifications from blocked apps until the active session ends. */
 public final class BlockerNoticeGuard extends NotificationListenerService {
     private static volatile BlockerNoticeGuard activeInstance;
 
@@ -25,9 +25,16 @@ public final class BlockerNoticeGuard extends NotificationListenerService {
         String pkg = sbn.getPackageName();
         if (pkg == null || pkg.equals(getPackageName())) return;
         if (State.selected(this).contains(pkg)) {
-            try { cancelNotification(sbn.getKey()); }
-            catch (RuntimeException ignored) { }
+            snoozeForSession(this, sbn.getKey());
         }
+    }
+
+    private static void snoozeForSession(BlockerNoticeGuard guard, String key) {
+        long remaining = State.remaining(guard);
+        if (remaining <= 1000L) return;
+        try {
+            guard.snoozeNotification(key, remaining);
+        } catch (RuntimeException ignored) { }
     }
 
     static void sweep(Context c) {
@@ -40,7 +47,7 @@ public final class BlockerNoticeGuard extends NotificationListenerService {
             if (list == null) return;
             for (StatusBarNotification sbn : list) {
                 if (sbn != null && blocked.contains(sbn.getPackageName()) && !c.getPackageName().equals(sbn.getPackageName())) {
-                    guard.cancelNotification(sbn.getKey());
+                    snoozeForSession(guard, sbn.getKey());
                 }
             }
         } catch (RuntimeException ignored) { }

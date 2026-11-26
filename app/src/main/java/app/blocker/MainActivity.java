@@ -48,7 +48,7 @@ public final class MainActivity extends Activity {
     private boolean animations(){return motion!=null&&motion.allowed();}
     private void stopViewMotion(View v){v.animate().cancel();v.clearAnimation();v.setStateListAnimator(null);v.jumpDrawablesToCurrentState();if(v.getBackground() instanceof RippleDrawable){RippleDrawable r=(RippleDrawable)v.getBackground();if(r.getNumberOfLayers()>0)v.setBackground(r.getDrawable(0));}if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)stopViewMotion(((ViewGroup)v).getChildAt(i));}
     private void applyMotion(){boolean allowed=animations();if(web!=null)web.setMotionAllowed(allowed&&!sheetVisible&&!exiting);if(preview!=null)preview.setMotionAllowed(allowed);for(Dialog d:nativeDialogs)if(d.getWindow()!=null){d.getWindow().setWindowAnimations(allowed?(centeredDialogs.contains(d)?R.style.QuietDialogMotion:R.style.QuietSheetMotion):0);if(!allowed)stopViewMotion(d.getWindow().getDecorView());}}
-    private void refreshCatalog(){if(executor.isShutdown())return;if(catalogLoading){catalogDirty=true;return;}catalogLoading=true;executor.execute(()->{List<AppCatalog.Entry> entries=AppCatalog.load(getApplicationContext());handler.post(()->{catalogLoading=false;if(isDestroyed())return;catalog=entries;loaded=true;if(pickerAdapter!=null)pickerAdapter.notifyDataSetChanged();if(resumed&&!exiting&&(web==null||!web.holding()))render();if(catalogDirty){catalogDirty=false;refreshCatalog();}});});}
+    private void refreshCatalog(){if(executor.isShutdown())return;if(catalogLoading){catalogDirty=true;return;}catalogLoading=true;executor.execute(()->{List<AppCatalog.Entry> entries=AppCatalog.load(getApplicationContext());handler.post(()->{catalogLoading=false;if(isDestroyed())return;catalog=entries;loaded=true;if(pickerAdapter!=null)pickerAdapter.notifyDataSetChanged();if(resumed&&!exiting&&!State.active(this)&&(web==null||!web.holding()))render();if(catalogDirty){catalogDirty=false;refreshCatalog();}});});}
     private void nativeSheetShown(Dialog d){setupDialog=d;nativeDialogs.add(d);sheetVisible=true;applyMotion();}
     private void nativeSheetClosed(Dialog closed){nativeDialogs.remove(closed);sheetVisible=!nativeDialogs.isEmpty();if(!sheetVisible)exitNote=null;if(closed==setupDialog){setupPreview=false;pickerAdapter=null;if(preview!=null){preview.destroy();preview=null;}}applyMotion();if(resumed&&!exiting)render();}
     private void scheduleTick(){handler.removeCallbacks(ticker);if(!resumed||exiting)return;if(State.active(this)||(page.equals("pause")&&pauseLeft()>0))handler.postDelayed(ticker,1000);else if(State.pending(this))handler.postDelayed(ticker,Math.max(1,State.prefs(this).getLong("setupAt",0)+600000-SystemClock.elapsedRealtime()));}
@@ -78,8 +78,11 @@ public final class MainActivity extends Activity {
         super.onNewIntent(intent);setIntent(intent);
         if(intent!=null&&intent.getBooleanExtra("blocked",false)){intent.removeExtra("blocked");for(Dialog dialog:new ArrayList<>(nativeDialogs))dialog.dismiss();exitNote=null;page="block";blockedSignal=SystemClock.elapsedRealtime();if(resumed)render();}
     }
+    @Override protected void onStart() {
+        super.onStart();if(web!=null){web.resumeTimers();web.onResume();}if(preview!=null)preview.onResume();
+    }
     @Override protected void onResume() {
-        super.onResume();resumed=true;inForeground=true;BlockerService.onMainActivityResumed();motion.foreground(true);if(web!=null){web.resumeTimers();web.onResume();}if(preview!=null)preview.onResume();refreshCatalog();
+        super.onResume();State.restoreClock(this);resumed=true;inForeground=true;BlockerService.onMainActivityResumed();motion.foreground(true);if(!State.active(this))refreshCatalog();
         if(State.expired(this)){BlockerService.complete(this);page="complete";}
         if(State.pending(this)&&(State.prefs(this).getBoolean("managedSession",false)||UninstallGuard.adminActive(this))){
             if(enabled()){
@@ -97,7 +100,8 @@ public final class MainActivity extends Activity {
         handler.removeCallbacks(ticker);handler.post(ticker);
         if(!exiting)render();else finishQuietExit();
     }
-    @Override protected void onPause(){resumed=false;inForeground=false;motion.foreground(false);if(web!=null){web.cancelHold();web.setMotionAllowed(false);web.onPause();web.pauseTimers();}if(preview!=null)preview.onPause();handler.removeCallbacks(ticker);super.onPause();}
+    @Override protected void onPause(){resumed=false;inForeground=false;motion.foreground(false);if(web!=null){web.cancelHold();web.setMotionAllowed(false);}handler.removeCallbacks(ticker);super.onPause();}
+    @Override protected void onStop(){if(web!=null){web.onPause();web.pauseTimers();}if(preview!=null)preview.onPause();super.onStop();}
     @Override protected void onDestroy(){inForeground=false;handler.removeCallbacksAndMessages(null);executor.shutdownNow();unregisterReceiver(packages);motion.close();if(preview!=null){preview.destroy();preview=null;}if(web!=null){web.removeJavascriptInterface("BlockerUI");if(web.getParent()!=null)((ViewGroup)web.getParent()).removeView(web);web.destroy();}for(Dialog dialog:new ArrayList<>(nativeDialogs))dialog.dismiss();super.onDestroy();}
     @Override public void onBackPressed() {
         if(exiting)return;
@@ -177,7 +181,7 @@ public final class MainActivity extends Activity {
             state.put("followTime",false);state.put("scene",currentScene());state.put("graphics",graphics);
             state.put("still",!animations()||sheetVisible);
             state.put("interrupted",State.active(this)&&!enabled());
-            state.put("guardMissing",State.active(this)&&!UninstallGuard.adminActive(this)&&!UninstallGuard.managedBlocked(this));
+            state.put("guardMissing",State.active(this)&&!State.prefs(this).getBoolean("scheduledSession",false)&&!UninstallGuard.adminActive(this)&&!UninstallGuard.managedBlocked(this));
             state.put("reason",State.reason(this));state.put("step",State.step(this));
             state.put("pauseStep",State.prefs(this).getString("pauseStep",State.step(this)));state.put("paused",pauseLeft()>0);
             int[] week=State.week(this);state.put("free",week[0]);state.put("logged",week[1]);
@@ -405,7 +409,7 @@ public final class MainActivity extends Activity {
             State.prefs(this).edit().putBoolean("schedOn",enabledToggle.isChecked())
                 .putInt("schedStartH",start[0]).putInt("schedStartM",start[1])
                 .putInt("schedEndH",end[0]).putInt("schedEndM",end[1]).apply();
-            Notices.scheduleBlock(this);schedDialog.dismiss();render();
+            Notices.scheduleBlock(this);schedDialog.dismiss();if(enabledToggle.isChecked()&&State.selected(this).isEmpty())toast("Schedule saved. Pick at least one app to block.");render();
         });
         LinearLayout panel=popupPanel("Daily schedule",true);
         PopupScroll scroll=new PopupScroll();scroll.addView(form);
@@ -431,7 +435,7 @@ public final class MainActivity extends Activity {
         content.addView(button(State.pending(this)?"Finish access setup":"About blocking access",false,()->{
             setupDialog.dismiss();
             if(State.pending(this)){lastSetupLaunch=-2000L;openPermissions();}
-            else confirmation("Blocking access","During a session, BLOCKER detects when you open a selected app and returns you to the timer. Android App info stays available.",null,"Got it",()->{},false);
+            else confirmation("Blocking access","During a session, BLOCKER detects when you open a selected app and returns you to the timer. Normal Settings, Quick Settings, and banking apps stay available while uninstall and App info screens stay protected.",null,"Got it",()->{},false);
         }));
         boolean alerts=getSystemService(NotificationManager.class).areNotificationsEnabled();
         content.addView(button("Session alerts · "+(alerts?"On":"Off")+"    ›",false,()->{
@@ -519,7 +523,7 @@ public final class MainActivity extends Activity {
         if(State.active(this)){
             State.prefs(this).edit().putBoolean("exitAfterSession",true).apply();page="block";render();
             if(exitNote!=null)return;
-            exitNote=confirmation("Session in progress","Wait for the timer ("+State.clock(State.remaining(this))+" remaining), or keep one finger inside the circle for "+State.holdLabel(State.sessionHold(this))+" continuously to exit.",null,"Back to timer",()->{exitNote=null;},false);return;
+            exitNote=confirmation("Session in progress","Wait for the timer ("+State.clock(State.remaining(this))+" remaining), or keep one finger inside the circle for "+State.holdLabel(State.sessionHold(this))+" continuously to exit.",null,"Back to timer",()->{exitNote=null;State.prefs(this).edit().putBoolean("exitAfterSession",false).apply();},false);return;
         }
         if(exiting)return;exiting=true;exitStarted=SystemClock.elapsedRealtime();handler.removeCallbacks(ticker);
         if(web!=null){web.cancelHold();web.setMotionAllowed(false);web.onPause();web.pauseTimers();}
@@ -534,7 +538,7 @@ public final class MainActivity extends Activity {
         if(!released&&SystemClock.elapsedRealtime()-exitStarted<3000){BlockerService.exit(this);handler.postDelayed(exitCheck,250);return;}
         exitFinished=true;BlockingAccess.disable(this);
         if(uninstallRequested)try{startActivity(new Intent(Intent.ACTION_DELETE,android.net.Uri.parse("package:"+getPackageName())));}catch(ActivityNotFoundException ignored){}
-        BlockingAccess.releaseRuntimePermissions(this);finishAndRemoveTask();
+        if(uninstallRequested||!State.scheduleEnabled(this))BlockingAccess.releaseRuntimePermissions(this);finishAndRemoveTask();
     }
     private void notificationPermission() {
         if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)

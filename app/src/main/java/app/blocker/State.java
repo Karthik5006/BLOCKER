@@ -40,7 +40,7 @@ final class State {
     static void prepare(Context c, int minutes) {
         if (minutes < 1 || minutes > 1439) throw new IllegalArgumentException("Choose between 1 minute and 23 hours 59 minutes.");
         long hold = effectiveHold(holdDuration(c), minutes * 60_000L);
-        prefs(c).edit().putBoolean("pending", true).putBoolean("active", false).putBoolean("sessionRecorded",false).putBoolean("showComplete",false).putBoolean("exitAfterSession",false).putInt("jar",0)
+        prefs(c).edit().putBoolean("pending", true).putBoolean("active", false).putBoolean("scheduledSession", false).putBoolean("sessionRecorded",false).putBoolean("showComplete",false).putBoolean("exitAfterSession",false).putInt("jar",0)
             .putInt("boot",boot(c)).putLong("setupAt",SystemClock.elapsedRealtime())
             .putInt("duration",minutes).putLong("sessionHold",hold).remove("unlockEnd").remove("wallEnd").putLong("sessionEnd",0).commit();
         Notices.sessionAlarm(c);
@@ -57,7 +57,7 @@ final class State {
         if (minutes < 1 || minutes > 1439 || active(c)) return false;
         long hold = effectiveHold(holdDuration(c), minutes * 60_000L);
         long end = SystemClock.elapsedRealtime() + minutes * 60_000L;
-        prefs(c).edit().putBoolean("pending", false).putBoolean("active", true)
+        prefs(c).edit().putBoolean("pending", false).putBoolean("active", true).putBoolean("scheduledSession", true)
             .putBoolean("sessionRecorded", false).putBoolean("showComplete", false).putBoolean("exitAfterSession", false)
             .putInt("boot", boot(c)).putInt("duration", minutes).putLong("sessionHold", hold)
             .putLong("sessionEnd", end).putLong("wallEnd", System.currentTimeMillis() + minutes * 60_000L).commit();
@@ -65,17 +65,14 @@ final class State {
         return true;
     }
     static void stop(Context c) {
-        prefs(c).edit().putBoolean("active",false).putBoolean("pending",false)
+        prefs(c).edit().putBoolean("active",false).putBoolean("pending",false).putBoolean("scheduledSession",false)
             .remove("unlockEnd").remove("wallEnd").putLong("sessionEnd",0).commit();
     }
     static long holdDuration(Context c){int m=prefs(c).getInt("holdMinutes",5);return (m==3||m==10?m:5)*60000L;}
     static long effectiveHold(long configuredMs, long windowMs) {
-        if (windowMs <= 0) return configuredMs;
-        if (windowMs <= configuredMs) {
-            long half = Math.max(10_000L, ((windowMs / 2L) / 5_000L) * 5_000L);
-            return Math.min(configuredMs, Math.min(windowMs, half));
-        }
-        return configuredMs;
+        if (windowMs <= 0 || windowMs > configuredMs) return configuredMs;
+        long half = ((windowMs / 2L) / 5_000L) * 5_000L;
+        return Math.max(10_000L, Math.min(configuredMs, half));
     }
     static long sessionHold(Context c){
         long base = prefs(c).getLong("sessionHold", 300_000L);

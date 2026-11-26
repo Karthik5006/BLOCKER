@@ -100,7 +100,8 @@ public final class BlockerService extends Service {
     static void ensureRunning(Context c) {
         if (!State.active(c) || !BlockingAccess.enabled(c)) return;
         BlockingAccess.prepare(c);
-        if (instance == null) startServiceInternal(c);
+        if (instance != null) instance.beginSession();
+        else startServiceInternal(c);
     }
 
     static void interceptNow(Context c) {
@@ -234,7 +235,7 @@ public final class BlockerService extends Service {
             lastQueryEnd = 0;
             hideShield();
         }
-        long since = lastQueryEnd == 0 ? now - 60_000L : Math.max(now - 15_000L, lastQueryEnd - 250L);
+        long since = lastQueryEnd == 0 ? now - 3_000L : Math.max(now - 15_000L, lastQueryEnd - 250L);
         UsageEvents events = usm.queryEvents(since, now);
         if (events == null) {
             hideShield();

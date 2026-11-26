@@ -45,7 +45,6 @@ public class GuardRoutesTest {
         assertFalse(routes.shouldBlock("com.phonepe.app", null, withoutSettings));
         assertTrue(routes.shouldBlock("com.brave.browser", null, withoutSettings));
         assertTrue(routes.shouldBlock("com.android.settings", "com.android.settings.SubSettings", withoutSettings));
-        assertTrue(routes.shouldBlock("com.samsung.android.settings.intelligence", "com.samsung.android.settings.search.SearchActivity", withoutSettings));
         assertTrue(routes.shouldBlock("com.android.settings", "com.android.settings.applications.InstalledAppDetails", withoutSettings));
         assertTrue(routes.shouldBlock("com.android.settings", "com.android.settings.spa.SpaActivity", withoutSettings));
         assertTrue(routes.shouldBlock("com.android.settings", "com.android.settings.DeviceAdminAdd", withoutSettings));

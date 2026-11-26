@@ -20,9 +20,19 @@ final class AlpineScreen extends WebView {
    });}
    @JavascriptInterface public void action(String name){activity.runOnUiThread(()->{if(!activity.isDestroyed()&&!activity.isFinishing())actions.accept(name);});}
   },"BlockerUI");
-  setWebViewClient(new WebViewClient(){public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return true;}public boolean shouldOverrideUrlLoading(WebView v,String u){return true;}public void onPageFinished(WebView v,String u){ready=true;setMotionAllowed(motionAllowed);didLoad.run();}});
+  setAlpha(0f);
+  setWebViewClient(new WebViewClient(){public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return true;}public boolean shouldOverrideUrlLoading(WebView v,String u){return true;}public void onPageFinished(WebView v,String u){ready=true;setMotionAllowed(motionAllowed);didLoad.run();post(()->{if(motionAllowed)animate().alpha(1f).setDuration(90L).start();else setAlpha(1f);});}});
   if(htmlCache==null)htmlCache=asset(activity,"alpine.html").replace("<!--VALLEY-->",asset(activity,"valley.svg")).replace("/*NATURAL_CSS*/",asset(activity,"natural.css")).replace("/*NATURAL_JS*/",asset(activity,"natural.js"));
-  loadDataWithBaseURL("https://blocker.invalid/",htmlCache,"text/html","UTF-8",null);
+  String initialHtml=htmlCache;
+  if(State.active(activity)){
+   initialHtml=initialHtml
+    .replace("data-scene=\"Dusk\"><div id=\"app\" data-page=\"block\"", "data-scene=\"Night\"><div id=\"app\" data-page=\"session\"")
+    .replace("<div id=\"sessionSky\" hidden>", "<div id=\"sessionSky\">")
+    .replace("<section id=\"block\">", "<section id=\"block\" hidden>")
+    .replace("<section id=\"active\" hidden>", "<section id=\"active\">")
+    .replace("</main><nav>", "</main><nav hidden>");
+  }
+  loadDataWithBaseURL("https://blocker.invalid/",initialHtml,"text/html","UTF-8",null);
  }
  @Override public ActionMode startActionMode(ActionMode.Callback callback){return null;}
  @Override public ActionMode startActionMode(ActionMode.Callback callback,int type){return null;}

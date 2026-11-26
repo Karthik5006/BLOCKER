@@ -20,7 +20,6 @@ final class GuardRoutes {
         "com.miui.packageinstaller", "com.miui.global.packageinstaller",
         "com.oplus.packageinstaller", "com.oneplus.packageinstaller",
         "com.samsung.android.packageinstaller",
-        "com.samsung.android.settings.intelligence",
         "com.miui.securitycenter", "com.coloros.safecenter", "com.oplus.safecenter",
         "com.vivo.permissionmanager", "com.iqoo.secure", "com.huawei.systemmanager"
     ));
