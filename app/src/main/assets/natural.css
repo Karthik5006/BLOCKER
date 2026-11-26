@@ -1,7 +1,7 @@
 /* Eight moving layers at most during a hold: two ambient groups, two ring arcs,
    dawn, moon, growing tree, breathing halo. All animation is transform/opacity. */
 /* Presentation-only WebViews: gestures never select labels or open text callouts. */
-html,body,body *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+html,body,body *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 html,body{background:#142a25;color:#f4eddd}
 body{--p:0;--scenic-p:0;--zen:#667b79;--mid:#ada58f;--haze:#e7c89a;--sun:#ffdb9e;--far:#87928d;--rock:#71837e;--lit:#b2b4a0;--snow:#dbd9c3;--face:#637b73;--backHill:#57756b;--mist:#d5dfcc;--hill:#416456;--meadow:#375b4e;--trail:#a4b4a0;--trees:#294d40;--wood:#314b3c;--ridge:#2c4d40;--deep:#142a25;--skytext:#f4eddd;--ink:#142a25;--accent:#c3d6ad;--muted:#b2c2b5;--line:#425b4e;--panel:#243d34}
 body[data-scene=Night]{--zen:#102923;--mid:#24443c;--haze:#647b65;--sun:#e9dcaf;--far:#526e60;--rock:#426255;--lit:#7f9380;--snow:#afbaa5;--face:#355246;--backHill:#304e42;--mist:#9bb7a0;--hill:#25473b;--meadow:#234136;--trail:#5c7966;--trees:#1a382d;--wood:#263c2d;--ridge:#203d31;--deep:#11271f;--skytext:#f4eddd}
@@ -79,7 +79,8 @@ body.motion-off *,body.motion-off *::before,body.motion-off *::after{animation-p
 .cg-board.g3{grid-template-columns:repeat(3,minmax(0,1fr));max-width:228px}
 .cg-board.g4{grid-template-columns:repeat(4,minmax(0,1fr));max-width:276px}
 .cg-board.glide-wrap{display:block;max-width:100%;margin:12px 0 6px}
-.cg-canvas{display:block;width:100%;height:196px;border-radius:14px;border:1px solid #3c5948;background:#152922;touch-action:none;cursor:pointer}
+.cg-canvas{display:block;width:100%;height:224px;border-radius:14px;border:1px solid #3c5948;background:#152922;touch-action:none;cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent;-webkit-focus-ring-color:transparent}
+.cg-canvas:focus,.cg-canvas:active{outline:none;border-color:#3c5948}
 .cg-cell{aspect-ratio:1;border-radius:13px;background:#264237;border:1px solid #3c5948;color:#f4eddd;font-size:18px;font-weight:450;display:grid;place-items:center;padding:0;transition:transform 140ms ease,background-color 160ms ease,border-color 160ms ease,color 160ms ease}
 .cg-cell.lit{background:#c3d6ad;border-color:#e8f2d8;color:#1c3428;transform:scale(1.03)}
 .cg-cell.ok{background:#7ea37d;border-color:#c3d6ad;color:#142a25}

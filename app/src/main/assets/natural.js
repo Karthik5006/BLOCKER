@@ -100,67 +100,107 @@ function cgStartPairs(){
  });
 }
 
-/* Alpine Glide: Alto's Adventure–inspired downhill alpine runner with scarf, backflips, and light orbs (zero idle loop) */
+/* Alpine Glide 2.0: Alto-inspired steep downhill runner with slope momentum, ramps, bunting grinds, dynamic sky & zero idle battery */
 function cgStartGlide(){
  cgStopAll();cgLocked=false;cgBoard.className='cg-board glide-wrap';cgBoard.textContent='';
  const cvs=document.createElement('canvas');cvs.className='cg-canvas';cvs.id='glideCanvas';
+ cvs.setAttribute('tabindex','-1');
  cvs.setAttribute('aria-label','Alpine Glide game canvas. Tap to jump, hold in air to backflip.');
  cgBoard.append(cvs);
  const ctx=cvs.getContext('2d');
  const dpr=Math.min(2,window.devicePixelRatio||1);
- let W=300,H=196;
+ let W=300,H=224;
  function resize(){
   const rect=cvs.getBoundingClientRect();
   W=Math.max(240,Math.round(rect.width||300));
-  H=196;
+  H=224;
   cvs.width=Math.round(W*dpr);cvs.height=Math.round(H*dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
  }
  resize();
 
- const stars=[[0.12,0.16,1.1],[0.24,0.11,0.9],[0.38,0.19,1.2],[0.52,0.09,1.0],[0.67,0.15,1.3],[0.79,0.22,0.9],[0.88,0.12,1.1],[0.31,0.28,0.8],[0.61,0.26,0.9]];
- const riderScreenX=76;
- let raf=0,lastTs=0,phase='ready'; // ready | run | over
- let worldX=0,speed=142,boost=0,score=0,orbsGot=0,flips=0;
- let ry=0,vy=0,grounded=true,coyote=0,angle=0,flipAccum=0,didFlip=false,pressing=false;
- let obstacles=[],orbs=[],puffs=[],scarf=[];
- let nextRockX=320,nextOrbX=210,banner='',bannerT=0;
+ const stars=[[0.09,0.14,1.1],[0.19,0.09,0.9],[0.31,0.18,1.3],[0.44,0.08,1.0],[0.58,0.15,1.2],[0.71,0.10,1.0],[0.84,0.19,1.2],[0.92,0.11,0.9],[0.26,0.26,0.8],[0.64,0.24,0.9],[0.49,0.22,0.8]];
+ const palettes=[
+  {top:[20,46,41],mid:[48,79,69],hor:[166,184,154],sun:[247,230,189],far:[36,61,53],midM:[26,48,41],nearM:[18,37,31],snow:[198,218,178],starA:0.65},
+  {top:[14,28,44],mid:[33,56,74],hor:[118,144,148],sun:[236,240,224],far:[26,45,59],midM:[19,35,47],nearM:[13,26,35],snow:[184,207,204],starA:0.95},
+  {top:[46,48,68],mid:[120,96,104],hor:[235,184,142],sun:[255,226,168],far:[72,62,74],midM:[50,47,58],nearM:[32,35,44],snow:[236,210,182],starA:0.25},
+  {top:[30,60,58],mid:[82,118,104],hor:[210,214,174],sun:[255,240,196],far:[52,82,74],midM:[37,63,56],nearM:[23,44,39],snow:[218,228,196],starA:0.12}
+ ];
+ function mixRGB(a,b,t){return 'rgb('+Math.round(a[0]+(b[0]-a[0])*t)+','+Math.round(a[1]+(b[1]-a[1])*t)+','+Math.round(a[2]+(b[2]-a[2])*t)+')';}
 
+ const riderSX=82;
+ const BASE_SLOPE=0.25; // true steep downhill descent
+ let raf=0,lastTs=0,phase='ready';
+ let worldX=0,camY=0,speed=155,boost=0,score=0,orbsGot=0,flips=0,combo=0;
+ let ry=0,vy=0,grounded=true,grinding=null,coyote=0,jumpBuf=0,angle=0,flipAccum=0,flipCount=0,pressing=false;
+ let obstacles=[],ramps=[],lines=[],orbs=[],puffs=[],scarf=[],cabins=[];
+ let nextRockX=360,nextRampX=520,nextLineX=780,nextOrbX=190,nextCabinX=290;
+ let banner='',bannerT=0,sprayAccum=0;
+
+ // Steep rolling mountain terrain in world coordinates (y increases downward)
  function terrainY(wx){
-  return 134+Math.sin(wx*0.0085)*18+Math.sin(wx*0.019+1.2)*8;
+  return wx*BASE_SLOPE
+   + Math.sin(wx*0.0052)*34
+   + Math.sin(wx*0.0135+0.9)*14
+   + Math.sin(wx*0.027+2.1)*5;
  }
  function slopeAngle(wx){
-  return Math.atan2(terrainY(wx+6)-terrainY(wx-6),12);
+  return Math.atan2(terrainY(wx+8)-terrainY(wx-8),16);
  }
- function addPuff(x,y,col,n){
-  for(let i=0;i<n&&puffs.length<16;i++){
-   puffs.push({x,y,vx:-30-Math.random()*55,vy:-25-Math.random()*45,r:2+Math.random()*2.4,a:0.85,col});
+ function addPuff(wx,wy,col,n,spd){
+  for(let i=0;i<n&&puffs.length<24;i++){
+   puffs.push({wx,wy,vx:-25-Math.random()*(spd||55),vy:-20-Math.random()*(spd||45),r:1.8+Math.random()*2.5,a:0.9,col});
   }
  }
  function resetRun(){
-  worldX=0;speed=142;boost=0;score=0;orbsGot=0;flips=0;
-  ry=terrainY(riderScreenX);vy=0;grounded=true;coyote=0;angle=slopeAngle(riderScreenX);
-  flipAccum=0;didFlip=false;pressing=false;
-  obstacles=[];orbs=[];puffs=[];scarf=[];
-  nextRockX=310;nextOrbX=200;banner='';bannerT=0;
-  for(let i=0;i<7;i++)scarf.push({x:riderScreenX-i*5,y:ry-13});
+  worldX=0;speed=155;boost=0;score=0;orbsGot=0;flips=0;combo=0;
+  const startX=riderSX;
+  ry=terrainY(startX);camY=ry-H*0.64;
+  vy=0;grounded=true;grinding=null;coyote=0;jumpBuf=0;
+  angle=slopeAngle(startX);flipAccum=0;flipCount=0;pressing=false;
+  obstacles=[];ramps=[];lines=[];orbs=[];puffs=[];scarf=[];cabins=[];
+  nextRockX=340;nextRampX=490;nextLineX=740;nextOrbX=180;nextCabinX=280;
+  banner='';bannerT=0;sprayAccum=0;
+  for(let i=0;i<10;i++)scarf.push({wx:startX-i*5,wy:ry-13});
   spawnAhead();
  }
  function spawnAhead(){
-  const horizon=worldX+W+220;
-  while(nextRockX<horizon){
-   const r=8+Math.random()*4;
-   obstacles.push({x:nextRockX,r});
-   // Place a gentle arc of light orbs above some boulders
-   if(Math.random()<0.65){
-    orbs.push({x:nextRockX,y:terrainY(nextRockX)-38-Math.random()*12,got:false});
+  const horizon=worldX+W+320;
+  while(nextRampX<horizon){
+   ramps.push({x:nextRampX,w:42,h:17});
+   // Arc of light orbs off every jump ramp
+   for(let k=0;k<3;k++){
+    const ox=nextRampX+55+k*34;
+    orbs.push({x:ox,y:terrainY(ox)-54-Math.sin(k*1.1)*16,got:false});
    }
-   nextRockX+=185+Math.random()*125;
+   nextRampX+=420+Math.random()*260;
+  }
+  while(nextLineX<horizon){
+   const len=135+Math.random()*65;
+   const x1=nextLineX,x2=nextLineX+len;
+   const y1=terrainY(x1)-34,y2=terrainY(x2)-34;
+   lines.push({x1,y1,x2,y2});
+   orbs.push({x:(x1+x2)*0.5,y:(y1+y2)*0.5-10,got:false});
+   nextLineX+=560+Math.random()*320;
+  }
+  while(nextRockX<horizon){
+   const clearRamp=ramps.every(r=>Math.abs(r.x-nextRockX)>85);
+   if(clearRamp){
+    const r=8+Math.random()*4.5;
+    obstacles.push({x:nextRockX,r});
+    if(Math.random()<0.6)orbs.push({x:nextRockX+4,y:terrainY(nextRockX)-38-Math.random()*12,got:false});
+   }
+   nextRockX+=210+Math.random()*140;
   }
   while(nextOrbX<horizon){
-   const clear=obstacles.every(o=>Math.abs(o.x-nextOrbX)>36);
-   if(clear)orbs.push({x:nextOrbX,y:terrainY(nextOrbX)-24-Math.random()*26,got:false});
-   nextOrbX+=125+Math.random()*95;
+   if(obstacles.every(o=>Math.abs(o.x-nextOrbX)>34)){
+    orbs.push({x:nextOrbX,y:terrainY(nextOrbX)-22-Math.random()*22,got:false});
+   }
+   nextOrbX+=135+Math.random()*100;
+  }
+  while(nextCabinX<horizon){
+   cabins.push({x:nextCabinX,w:22+Math.random()*8});
+   nextCabinX+=380+Math.random()*290;
   }
  }
  function stopLoop(){
@@ -169,124 +209,185 @@ function cgStartGlide(){
  }
  cgGlideStop=stopLoop;
 
- function drawMountainLayer(scroll,baseY,amp,freq,color,trees){
+ function drawMountainLayer(scroll,baseY,amp,freq,color,trees,snowCaps){
   ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(0,H);
   for(let x=0;x<=W+12;x+=12){
    const wx=x+scroll;
-   const y=baseY+Math.sin(wx*freq)*amp+Math.sin(wx*freq*2.3+0.8)*(amp*0.42);
+   const y=baseY+Math.sin(wx*freq)*amp+Math.sin(wx*freq*2.15+0.8)*(amp*0.44);
    ctx.lineTo(x,y);
   }
   ctx.lineTo(W,H);ctx.closePath();ctx.fill();
+  if(snowCaps){
+   ctx.strokeStyle='rgba(244,237,221,0.16)';ctx.lineWidth=1.5;ctx.beginPath();
+   for(let x=0;x<=W+12;x+=12){
+    const wx=x+scroll;
+    const y=baseY+Math.sin(wx*freq)*amp+Math.sin(wx*freq*2.15+0.8)*(amp*0.44);
+    if(x===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+   }
+   ctx.stroke();
+  }
   if(trees){
-   const step=52,first=Math.floor(scroll/step)*step;
+   const step=42,first=Math.floor(scroll/step)*step;
    for(let tx=first;tx<scroll+W+step;tx+=step){
-    const hHash=Math.abs(Math.sin(tx*0.17));
-    if(hHash<0.32)continue;
+    const hHash=Math.abs(Math.sin(tx*0.19));
+    if(hHash<0.28)continue;
     const sx=tx-scroll;
-    const ty=baseY+Math.sin(tx*freq)*amp+Math.sin(tx*freq*2.3+0.8)*(amp*0.42)+2;
-    const th=11+hHash*10;
+    const ty=baseY+Math.sin(tx*freq)*amp+Math.sin(tx*freq*2.15+0.8)*(amp*0.44)+2;
+    const th=10+hHash*12;
     ctx.beginPath();ctx.moveTo(sx,ty-th);ctx.lineTo(sx-5,ty+3);ctx.lineTo(sx+5,ty+3);ctx.closePath();ctx.fill();
    }
   }
  }
 
  function draw(){
-  // Dusk-to-sage twilight sky
+  // Smooth dynamic sky cycle every ~140m
+  const cycle=(score/140)%palettes.length;
+  const idxA=Math.floor(cycle),idxB=(idxA+1)%palettes.length,t=cycle-idxA;
+  const pA=palettes[idxA],pB=palettes[idxB];
+
   const sky=ctx.createLinearGradient(0,0,0,H);
-  sky.addColorStop(0,'#172f29');sky.addColorStop(0.55,'#2f4d43');sky.addColorStop(1,'#8da38c');
+  sky.addColorStop(0,mixRGB(pA.top,pB.top,t));
+  sky.addColorStop(0.55,mixRGB(pA.mid,pB.mid,t));
+  sky.addColorStop(1,mixRGB(pA.hor,pB.hor,t));
   ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
 
-  // Subtle stars
-  ctx.fillStyle='rgba(245,236,204,0.6)';
-  for(const s of stars){ctx.beginPath();ctx.arc(s[0]*W,s[1]*H,s[2],0,Math.PI*2);ctx.fill();}
+  // Stars
+  const starAlpha=pA.starA+(pB.starA-pA.starA)*t;
+  if(starAlpha>0.05){
+   ctx.fillStyle='rgba(245,238,214,'+starAlpha.toFixed(2)+')';
+   for(const s of stars){ctx.beginPath();ctx.arc(s[0]*W,s[1]*H,s[2],0,Math.PI*2);ctx.fill();}
+  }
 
-  // Glowing alpine moon/sun
-  const mx=W*0.78,my=38;
-  const glow=ctx.createRadialGradient(mx,my,4,mx,my,36);
-  glow.addColorStop(0,'rgba(255,234,179,0.52)');glow.addColorStop(1,'rgba(255,234,179,0)');
-  ctx.fillStyle=glow;ctx.beginPath();ctx.arc(mx,my,36,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#f7e6bd';ctx.beginPath();ctx.arc(mx,my,11,0,Math.PI*2);ctx.fill();
+  // Sun / Moon orb drifting subtly across sky
+  const mx=W*0.77,my=40+Math.sin(cycle*1.5)*10;
+  const sunCol=mixRGB(pA.sun,pB.sun,t);
+  const glow=ctx.createRadialGradient(mx,my,4,mx,my,40);
+  glow.addColorStop(0,'rgba(255,234,179,0.48)');glow.addColorStop(1,'rgba(255,234,179,0)');
+  ctx.fillStyle=glow;ctx.beginPath();ctx.arc(mx,my,40,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=sunCol;ctx.beginPath();ctx.arc(mx,my,11.5,0,Math.PI*2);ctx.fill();
 
-  // Parallax mountain ridges
-  drawMountainLayer(worldX*0.14,88,20,0.008,'#2a443b',false);
-  drawMountainLayer(worldX*0.34,108,15,0.012,'#1e362e',true);
+  // Parallax mountain silhouettes (descend gently with slope)
+  const parY=(camY*0.04)%24;
+  drawMountainLayer(worldX*0.10,92-parY*0.2,24,0.007,mixRGB(pA.far,pB.far,t),false,true);
+  drawMountainLayer(worldX*0.26,118-parY*0.4,18,0.011,mixRGB(pA.midM,pB.midM,t),true,false);
+  drawMountainLayer(worldX*0.48,144-parY*0.5,14,0.015,mixRGB(pA.nearM,pB.nearM,t),true,false);
 
-  // Foreground rolling snow/sage slope
-  ctx.fillStyle='#132620';ctx.beginPath();ctx.moveTo(0,H);
-  for(let x=0;x<=W+6;x+=6)ctx.lineTo(x,terrainY(worldX+x));
+  // Background cabins along the slope
+  for(const c of cabins){
+   const sx=c.x-worldX;if(sx<-35||sx>W+35)continue;
+   const sy=terrainY(c.x)-camY;
+   ctx.fillStyle='#192e27';
+   ctx.beginPath();ctx.moveTo(sx-c.w*0.5,sy+4);ctx.lineTo(sx-c.w*0.5,sy-11);ctx.lineTo(sx,sy-20);ctx.lineTo(sx+c.w*0.5,sy-11);ctx.lineTo(sx+c.w*0.5,sy+4);ctx.closePath();ctx.fill();
+   ctx.fillStyle='#ffdf94';ctx.fillRect(sx-3,sy-9,5,5);
+  }
+
+  // Grindable bunting / alpine wire lines
+  for(const ln of lines){
+   const x1=ln.x1-worldX,x2=ln.x2-worldX;
+   if(x2<-20||x1>W+20)continue;
+   const y1=ln.y1-camY,y2=ln.y2-camY;
+   const g1=terrainY(ln.x1)-camY,g2=terrainY(ln.x2)-camY;
+   ctx.strokeStyle='#4e695c';ctx.lineWidth=2;
+   ctx.beginPath();ctx.moveTo(x1,g1+4);ctx.lineTo(x1,y1-4);ctx.moveTo(x2,g2+4);ctx.lineTo(x2,y2-4);ctx.stroke();
+   ctx.strokeStyle='#e6d9b8';ctx.lineWidth=1.8;
+   ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+   // Tiny alpine flags along the line
+   const flags=6;
+   for(let f=1;f<flags;f++){
+    const ft=f/flags,fx=x1+(x2-x1)*ft,fy=y1+(y2-y1)*ft;
+    ctx.fillStyle=f%2?'#e8a87c':'#c3d6ad';
+    ctx.beginPath();ctx.moveTo(fx-3,fy+1);ctx.lineTo(fx+3,fy+1);ctx.lineTo(fx,fy+7);ctx.closePath();ctx.fill();
+   }
+  }
+
+  // Steep foreground snow/alpine slope
+  ctx.fillStyle='#10221c';ctx.beginPath();ctx.moveTo(0,H);
+  for(let x=0;x<=W+6;x+=6)ctx.lineTo(x,terrainY(worldX+x)-camY);
   ctx.lineTo(W,H);ctx.closePath();ctx.fill();
 
-  // Sunlit snow crest line
-  ctx.strokeStyle='#c3d6ad';ctx.lineWidth=2.4;ctx.beginPath();
-  for(let x=0;x<=W+6;x+=6){const y=terrainY(worldX+x);if(x===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}
+  // Subtle slope depth shadow band under crest
+  ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=9;ctx.beginPath();
+  for(let x=0;x<=W+6;x+=6){const y=terrainY(worldX+x)-camY+6;if(x===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}
   ctx.stroke();
+
+  // Sunlit snow crest line
+  ctx.strokeStyle=mixRGB(pA.snow,pB.snow,t);ctx.lineWidth=2.6;ctx.beginPath();
+  for(let x=0;x<=W+6;x+=6){const y=terrainY(worldX+x)-camY;if(x===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}
+  ctx.stroke();
+
+  // Launch ramps
+  for(const rm of ramps){
+   const sx=rm.x-worldX;if(sx<-50||sx>W+50)continue;
+   const y0=terrainY(rm.x)-camY,y1=terrainY(rm.x+rm.w)-camY;
+   ctx.fillStyle='#2a453b';ctx.beginPath();
+   ctx.moveTo(sx,y0+1);ctx.lineTo(sx+rm.w,y1-rm.h);ctx.lineTo(sx+rm.w,y1+4);ctx.closePath();ctx.fill();
+   ctx.strokeStyle='#dce8c8';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(sx,y0);ctx.lineTo(sx+rm.w,y1-rm.h);ctx.stroke();
+  }
 
   // Light orbs
   for(const o of orbs){
    if(o.got)continue;
-   const sx=o.x-worldX;if(sx<-15||sx>W+15)continue;
-   const og=ctx.createRadialGradient(sx,o.y,1,sx,o.y,10);
-   og.addColorStop(0,'rgba(255,233,168,0.95)');og.addColorStop(1,'rgba(255,233,168,0)');
-   ctx.fillStyle=og;ctx.beginPath();ctx.arc(sx,o.y,10,0,Math.PI*2);ctx.fill();
-   ctx.fillStyle='#fff4d2';ctx.beginPath();ctx.arc(sx,o.y,3.2,0,Math.PI*2);ctx.fill();
+   const sx=o.x-worldX,sy=o.y-camY;if(sx<-15||sx>W+15)continue;
+   const og=ctx.createRadialGradient(sx,sy,1,sx,sy,11);
+   og.addColorStop(0,'rgba(255,234,170,0.95)');og.addColorStop(1,'rgba(255,234,170,0)');
+   ctx.fillStyle=og;ctx.beginPath();ctx.arc(sx,sy,11,0,Math.PI*2);ctx.fill();
+   ctx.fillStyle='#fff6d8';ctx.beginPath();ctx.arc(sx,sy,3.2,0,Math.PI*2);ctx.fill();
   }
 
   // Alpine boulders
   for(const rock of obstacles){
    const sx=rock.x-worldX;if(sx<-20||sx>W+20)continue;
-   const sy=terrainY(rock.x);
-   ctx.fillStyle='#3a5449';ctx.beginPath();
-   ctx.moveTo(sx-rock.r,sy+3);ctx.lineTo(sx-rock.r*0.55,sy-rock.r*0.95);
-   ctx.lineTo(sx+rock.r*0.25,sy-rock.r*1.05);ctx.lineTo(sx+rock.r,sy+3);ctx.closePath();ctx.fill();
-   ctx.fillStyle='#728d7f';ctx.beginPath();
-   ctx.moveTo(sx-rock.r*0.55,sy-rock.r*0.95);ctx.lineTo(sx+rock.r*0.25,sy-rock.r*1.05);
-   ctx.lineTo(sx+rock.r*0.05,sy-rock.r*0.25);ctx.closePath();ctx.fill();
+   const sy=terrainY(rock.x)-camY;
+   ctx.fillStyle='#344f44';ctx.beginPath();
+   ctx.moveTo(sx-rock.r,sy+4);ctx.lineTo(sx-rock.r*0.55,sy-rock.r*0.95);
+   ctx.lineTo(sx+rock.r*0.28,sy-rock.r*1.08);ctx.lineTo(sx+rock.r,sy+4);ctx.closePath();ctx.fill();
+   ctx.fillStyle='#789687';ctx.beginPath();
+   ctx.moveTo(sx-rock.r*0.55,sy-rock.r*0.95);ctx.lineTo(sx+rock.r*0.28,sy-rock.r*1.08);
+   ctx.lineTo(sx+rock.r*0.05,sy-rock.r*0.22);ctx.closePath();ctx.fill();
   }
 
-  // Snow/mist puffs
+  // Snow spray & shimmer particles
   for(const p of puffs){
    ctx.globalAlpha=Math.max(0,p.a);ctx.fillStyle=p.col;
-   ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();
+   ctx.beginPath();ctx.arc(p.wx-worldX,p.wy-camY,p.r,0,Math.PI*2);ctx.fill();
   }
   ctx.globalAlpha=1;
 
-  // Flowing Alto-style scarf behind rider
+  // Flowing Alto-style scarf
+  const rsy=ry-camY;
   if(scarf.length>1){
    ctx.strokeStyle=boost>0?'#ffe3a3':'#e8a87c';ctx.lineCap='round';ctx.lineJoin='round';
    for(let i=0;i<scarf.length-1;i++){
-    ctx.lineWidth=Math.max(1.2,4.2-i*0.52);
-    ctx.globalAlpha=Math.max(0.2,1-i*0.12);
-    ctx.beginPath();ctx.moveTo(scarf[i].x,scarf[i].y);ctx.lineTo(scarf[i+1].x,scarf[i+1].y);ctx.stroke();
+    ctx.lineWidth=Math.max(1.2,4.4-i*0.38);
+    ctx.globalAlpha=Math.max(0.18,1-i*0.09);
+    ctx.beginPath();ctx.moveTo(scarf[i].wx-worldX,scarf[i].wy-camY);ctx.lineTo(scarf[i+1].wx-worldX,scarf[i+1].wy-camY);ctx.stroke();
    }
    ctx.globalAlpha=1;
   }
 
-  // Rider silhouette + snowboard
-  ctx.save();ctx.translate(riderScreenX,ry);ctx.rotate(angle);
-  if(boost>0){
-   ctx.fillStyle='rgba(255,227,163,0.22)';ctx.beginPath();ctx.arc(0,-9,16,0,Math.PI*2);ctx.fill();
+  // Rider silhouette + board
+  ctx.save();ctx.translate(riderSX,rsy);ctx.rotate(angle);
+  if(boost>0||grinding){
+   ctx.fillStyle='rgba(255,227,163,0.24)';ctx.beginPath();ctx.arc(0,-9,17,0,Math.PI*2);ctx.fill();
   }
-  // Snowboard
-  ctx.strokeStyle='#e8f2d8';ctx.lineWidth=2.6;ctx.lineCap='round';
-  ctx.beginPath();ctx.moveTo(-11,0);ctx.quadraticCurveTo(0,2,12,-1.5);ctx.stroke();
-  // Rider cloak/body silhouette
+  ctx.strokeStyle='#eef5df';ctx.lineWidth=2.6;ctx.lineCap='round';
+  ctx.beginPath();ctx.moveTo(-11,0);ctx.quadraticCurveTo(0,2.2,12,-1.6);ctx.stroke();
   ctx.fillStyle='#f4eddd';
-  ctx.beginPath();ctx.moveTo(-5,-1);ctx.lineTo(-1,-13);ctx.lineTo(4,-11);ctx.lineTo(3,-1);ctx.closePath();ctx.fill();
-  ctx.beginPath();ctx.arc(1,-16,3.4,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.moveTo(-5,-1);ctx.lineTo(-1,-13.5);ctx.lineTo(4.2,-11.5);ctx.lineTo(3,-1);ctx.closePath();ctx.fill();
+  ctx.beginPath();ctx.arc(1.2,-16.5,3.4,0,Math.PI*2);ctx.fill();
   ctx.restore();
 
-  // Subtle HUD inside canvas
-  ctx.fillStyle='rgba(244,237,221,0.88)';ctx.font='500 12px Outfit,sans-serif';ctx.textAlign='left';
+  // Clean HUD
+  ctx.fillStyle='rgba(244,237,221,0.92)';ctx.font='500 12px Outfit,sans-serif';ctx.textAlign='left';
   ctx.fillText(Math.floor(score)+' m',12,20);
-  if(cgGlideBest>0){ctx.textAlign='right';ctx.fillStyle='rgba(195,214,173,0.78)';ctx.fillText('Best '+cgGlideBest+' m',W-12,20);}
+  if(cgGlideBest>0){ctx.textAlign='right';ctx.fillStyle='rgba(195,214,173,0.85)';ctx.fillText('Best '+cgGlideBest+' m',W-12,20);}
   if(bannerT>0&&banner){
-   ctx.textAlign='center';ctx.fillStyle='rgba(255,231,173,'+Math.min(1,bannerT*1.6)+')';
+   ctx.textAlign='center';ctx.fillStyle='rgba(255,233,174,'+Math.min(1,bannerT*1.6)+')';
    ctx.font='500 13px Outfit,sans-serif';ctx.fillText(banner,W/2,44);
   }
 
-  // Calm overlay prompt when ready or ended
   if(phase!=='run'){
-   ctx.fillStyle='rgba(16,34,28,0.46)';ctx.fillRect(0,0,W,H);
+   ctx.fillStyle='rgba(14,30,25,0.48)';ctx.fillRect(0,0,W,H);
    ctx.textAlign='center';ctx.fillStyle='#f4eddd';ctx.font='500 15px Outfit,sans-serif';
    ctx.fillText(phase==='ready'?'Tap to glide':'Nice run · '+Math.floor(score)+' m',W/2,H/2-6);
    ctx.fillStyle='#c3d6ad';ctx.font='400 12px Outfit,sans-serif';
@@ -299,77 +400,152 @@ function cgStartGlide(){
   const dt=Math.min(0.033,lastTs?(ts-lastTs)/1000:0.016);lastTs=ts;
   if(boost>0)boost=Math.max(0,boost-dt);
   if(bannerT>0)bannerT=Math.max(0,bannerT-dt);
-  const curSpeed=speed+(boost>0?52:0);
-  worldX+=curSpeed*dt;
-  speed=Math.min(220,speed+dt*1.9);
-  score+=curSpeed*dt*0.075;
+  if(jumpBuf>0)jumpBuf=Math.max(0,jumpBuf-dt);
 
-  const groundY=terrainY(worldX+riderScreenX);
-  const gSlope=slopeAngle(worldX+riderScreenX);
-
+  const rwxPrev=worldX+riderSX;
+  const gSlope=slopeAngle(rwxPrev);
+  // Slope-driven momentum: accelerate faster on steep drops, coast gently on climbs
   if(grounded){
-   ry=groundY;vy=0;coyote=0.095;
-   angle+=(gSlope-angle)*Math.min(1,dt*14);
-   flipAccum=0;didFlip=false;
-  }else{
-   coyote=Math.max(0,coyote-dt);
-   vy+=590*dt;ry+=vy*dt;
-   if(pressing){
-    const spin=5.6*dt;angle-=spin;flipAccum+=spin;
-    if(flipAccum>=Math.PI*1.82)didFlip=true;
-   }else{
-    // Gently level toward slope when not holding
-    const norm=((angle-gSlope+Math.PI*3)%(Math.PI*2))-Math.PI;
-    angle-=norm*Math.min(1,dt*3.2);
-   }
-   if(ry>=groundY){
-    ry=groundY;vy=0;grounded=true;
-    // Check clean landing (within ~65 deg of slope)
-    const err=Math.abs((((angle-gSlope+Math.PI*3)%(Math.PI*2))-Math.PI));
-    if(err>1.18){
-     endRun('Landed off-balance');return;
+   speed+=Math.sin(gSlope)*195*dt;
+   speed=Math.max(138,Math.min(275,speed+(170-speed)*dt*0.35));
+  }
+  const curSpeed=speed+(boost>0?64:0)+(grinding?28:0);
+  worldX+=curSpeed*dt;
+  score+=curSpeed*dt*0.078;
+
+  const rwx=worldX+riderSX;
+  const groundY=terrainY(rwx);
+  const nextSlope=slopeAngle(rwx);
+
+  // Check launch ramp boost when grounded
+  let onRamp=false;
+  if(grounded){
+   for(const rm of ramps){
+    if(rwx>=rm.x&&rwx<=rm.x+rm.w){
+     const rt=(rwx-rm.x)/rm.w;
+     ry=groundY-rt*rm.h;
+     angle=nextSlope-0.32;
+     onRamp=true;
+     if(rt>0.82){
+      grounded=false;vy=-265-Math.min(75,(curSpeed-150)*0.65);
+      flipAccum=0;flipCount=0;
+      addPuff(rwx,ry,'#e8f2d8',7,65);
+     }
+     break;
     }
-    if(didFlip){
-     flips++;score+=5;boost=2.0;banner='Clean backflip! +5';bannerT=1.4;
-     addPuff(riderScreenX,ry,'#ffe3a3',8);
-    }else{
-     addPuff(riderScreenX,ry,'#d8e6c8',4);
-    }
-    angle=gSlope;
    }
   }
 
-  // Update scarf ribbon trail
-  const neckX=riderScreenX-Math.sin(angle)*13,neckY=ry-Math.cos(angle)*13;
-  scarf[0].x=neckX;scarf[0].y=neckY;
+  if(grinding){
+   if(rwx>grinding.x2){
+    grinding=null;grounded=false;vy=-195;boost=Math.max(boost,0.8);
+    addPuff(rwx,ry,'#ffe3a3',6,55);
+   }else{
+    const lt=(rwx-grinding.x1)/(grinding.x2-grinding.x1);
+    ry=grinding.y1+(grinding.y2-grinding.y1)*lt;
+    angle=Math.atan2(grinding.y2-grinding.y1,grinding.x2-grinding.x1);
+    vy=0;
+    sprayAccum+=dt;if(sprayAccum>0.06){sprayAccum=0;addPuff(rwx,ry,'#ffe3a3',1,35);}
+    if(jumpBuf>0){grinding=null;grounded=false;jumpBuf=0;vy=-260;flipAccum=0;flipCount=0;}
+   }
+  }else if(grounded){
+   if(!onRamp){
+    ry=groundY;vy=0;coyote=0.11;
+    angle+=(nextSlope-angle)*Math.min(1,dt*14);
+   }
+   flipAccum=0;flipCount=0;
+   // Snow spray while carving downhill
+   sprayAccum+=dt*(curSpeed/150);
+   if(sprayAccum>0.09){sprayAccum=0;addPuff(rwx-6,ry,'rgba(220,235,208,0.75)',1,32);}
+   if(jumpBuf>0){
+    grounded=false;coyote=0;jumpBuf=0;vy=-268-Math.min(45,(curSpeed-150)*0.3);
+    addPuff(rwx,ry,'#dce8c8',6,55);
+   }
+  }else{
+   coyote=Math.max(0,coyote-dt);
+   vy+=610*dt;ry+=vy*dt;
+   if(pressing){
+    const spin=6.1*dt;angle-=spin;flipAccum+=spin;
+    const completed=Math.floor((flipAccum+0.42)/(Math.PI*2));
+    if(completed>flipCount)flipCount=completed;
+   }else{
+    const norm=((angle-nextSlope+Math.PI*3)%(Math.PI*2))-Math.PI;
+    angle-=norm*Math.min(1,dt*3.4);
+   }
+   // Catch bunting line grind when descending onto it
+   if(vy>0){
+    for(const ln of lines){
+     if(rwx>=ln.x1&&rwx<=ln.x2){
+      const lt=(rwx-ln.x1)/(ln.x2-ln.x1);
+      const ly=ln.y1+(ln.y2-ln.y1)*lt;
+      if(Math.abs(ry-ly)<12){
+       grinding=ln;ry=ly;vy=0;score+=3;banner='Wire grind! +3';bannerT=1.1;
+       addPuff(rwx,ry,'#ffe3a3',6,50);break;
+      }
+     }
+    }
+   }
+   if(!grinding&&ry>=groundY){
+    ry=groundY;vy=0;grounded=true;
+    const err=Math.abs((((angle-nextSlope+Math.PI*3)%(Math.PI*2))-Math.PI));
+    if(err>1.22){endRun('Landed off-balance');return;}
+    if(flipCount>0){
+     flips+=flipCount;combo++;
+     const pts=flipCount>1?25:10;
+     score+=pts;boost=2.3;
+     banner=(flipCount>1?'Double backflip! +':'Clean backflip! +')+pts;bannerT=1.5;
+     addPuff(rwx,ry,'#ffe3a3',10,75);
+    }else{
+     addPuff(rwx,ry,'#d8e6c8',5,45);
+    }
+    angle=nextSlope;
+   }
+  }
+
+  // Smooth dynamic camera tracking steep downhill + air height
+  const airLift=Math.max(0,groundY-ry);
+  const targetCamY=Math.min(groundY-H*0.64,ry-H*0.44)-Math.min(20,airLift*0.18);
+  camY+=(targetCamY-camY)*Math.min(1,dt*7.5);
+
+  // Flowing multi-segment scarf in world coords
+  const neckX=rwx-Math.sin(angle)*13,neckY=ry-Math.cos(angle)*13;
+  scarf[0].wx=neckX;scarf[0].wy=neckY;
   for(let i=1;i<scarf.length;i++){
-   scarf[i].x-=curSpeed*dt*0.42;
-   scarf[i].x+=(scarf[i-1].x-6-scarf[i].x)*Math.min(1,dt*18);
-   scarf[i].y+=(scarf[i-1].y+Math.sin(worldX*0.05+i)*1.4-scarf[i].y)*Math.min(1,dt*18);
+   const prev=scarf[i-1];
+   const targetX=prev.wx-5.2-(boost>0?1.4:0);
+   const targetY=prev.wy-1.2+Math.sin(worldX*0.06+i*0.9)*1.9;
+   scarf[i].wx+=(targetX-scarf[i].wx)*Math.min(1,dt*20);
+   scarf[i].wy+=(targetY-scarf[i].wy)*Math.min(1,dt*20);
   }
 
   // Collect light orbs
-  const rwx=worldX+riderScreenX;
   for(const o of orbs){
    if(o.got)continue;
    const dx=o.x-rwx,dy=o.y-(ry-10);
-   if(dx*dx+dy*dy<260){
-    o.got=true;orbsGot++;score+=2;addPuff(o.x-worldX,o.y,'#ffe3a3',5);
+   if(dx*dx+dy*dy<290){
+    o.got=true;orbsGot++;score+=2;addPuff(o.x,o.y,'#ffe3a3',5,45);
    }
   }
-  orbs=orbs.filter(o=>!o.got&&o.x>worldX-30);
+  orbs=orbs.filter(o=>!o.got&&o.x>worldX-40);
 
-  // Check boulder collisions (forgiving hitbox)
-  for(const rock of obstacles){
-   const dx=rock.x-rwx,sy=terrainY(rock.x);
+  // Boulder collisions (forgiving hitbox; boost smashes through rocks!)
+  for(let k=obstacles.length-1;k>=0;k--){
+   const rock=obstacles[k],dx=rock.x-rwx,sy=terrainY(rock.x);
    if(Math.abs(dx)<rock.r*0.72&&ry>sy-rock.r*0.82){
-    endRun('Bumped a stone');return;
+    if(boost>0){
+     obstacles.splice(k,1);score+=3;banner='Rock smash! +3';bannerT=1.0;
+     addPuff(rock.x,sy-4,'#c3d6ad',9,75);
+    }else{
+     endRun('Bumped a stone');return;
+    }
    }
   }
-  obstacles=obstacles.filter(o=>o.x>worldX-40);
+  obstacles=obstacles.filter(o=>o.x>worldX-50);
+  ramps=ramps.filter(r=>r.x+r.w>worldX-50);
+  lines=lines.filter(l=>l.x2>worldX-50);
+  cabins=cabins.filter(c=>c.x>worldX-60);
 
-  // Update particles
-  for(const p of puffs){p.x+=p.vx*dt;p.y+=p.vy*dt;p.a-=dt*1.9;}
+  for(const p of puffs){p.wx+=p.vx*dt;p.wy+=p.vy*dt;p.a-=dt*1.9;}
   puffs=puffs.filter(p=>p.a>0);
 
   spawnAhead();
@@ -391,9 +567,12 @@ function cgStartGlide(){
    cgStatus.textContent='Tap to jump · Hold in air to backflip';
    draw();raf=requestAnimationFrame(step);return;
   }
-  if(grounded||coyote>0){
-   grounded=false;coyote=0;vy=-248;flipAccum=0;didFlip=false;
-   addPuff(riderScreenX,ry,'#d8e6c8',5);
+  if(grounded||coyote>0||grinding){
+   grinding=null;grounded=false;coyote=0;jumpBuf=0;
+   vy=-268-Math.min(45,(speed-150)*0.3);flipAccum=0;flipCount=0;
+   addPuff(worldX+riderSX,ry,'#dce8c8',6,55);
+  }else{
+   jumpBuf=0.12;
   }
  }
 

@@ -1,8 +1,8 @@
-# BLOCKER 5.5.1 final10
+# BLOCKER 5.5.1 final11
 
 BLOCKER is a personal focus timer for Android 8 and later. Choose the apps you want to pause, set a session length, and start the timer. During a session, BLOCKER detects when a selected app is in the foreground and shows a blocking screen. To end a session early, hold the on-screen control for the configured duration.
 
-[Download the 5.5.1 final10 APK](releases/5.5.1/BLOCKER-5.5.1-final10.apk?raw=1)
+[Download the 5.5.1 final11 APK](releases/5.5.1/BLOCKER-5.5.1-final11.apk?raw=1)
 
 ## Android permissions and banking apps
 
@@ -19,9 +19,9 @@ python3 tools/build.py --sdk /path/to/Android/Sdk
 
 The build writes `app/build/outputs/apk/personal/BLOCKER.apk`. It uses the local signing key in `signing/personal-debug.keystore` and creates one if needed. Android requires the same signing key for in-place updates.
 
-The final10 APK was built from the supplied source and signed with the local personal test key. Its signing certificate differs from final7. Switching from final7 requires a fresh install, which clears local app data. Optional notification access lets BLOCKER snooze notifications from selected apps for the remaining session time.
+The final11 APK was built from the supplied source and signed with the local personal test key. Its signing certificate differs from final7. Switching from final7 requires a fresh install, which clears local app data. Optional notification access lets BLOCKER snooze notifications from selected apps for the remaining session time.
 
-Published APK SHA-256: `cfaa8bba4e1d6babbf01070a52cfe736e648da65621f97260fcb1e3415c2fa4a`.
+Published APK SHA-256: `c53dd05a0c54a0d8ce8e8b4a62926511bd9bcc825071ef0c341c2e585b970b7b`.
 
 ## Earlier focus launcher
 
