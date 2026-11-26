@@ -4,7 +4,7 @@ BLOCKER is a personal focus timer for Android 8 and later. Choose the apps you w
 
 ## Downloads
 
-[Download BLOCKER 5.5.1 for Android](https://github.com/Karthik5006/BLOCKER/raw/eea535228f263cf7e4ad3fab66fd80e95458474f/releases/5.5.1/BLOCKER-5.5.1-final11.apk)
+[Download BLOCKER 5.5.1 for Android](https://github.com/Karthik5006/BLOCKER/raw/refs/heads/master/releases/5.5.1/v1.apk)
 
 ## Screenshots
 
