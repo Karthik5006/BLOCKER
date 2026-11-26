@@ -24,9 +24,6 @@ final class AppCatalog {
         android.net.Uri target = android.net.Uri.fromParts("package", c.getPackageName(), null);
         for (Intent intent : Arrays.asList(new Intent(Settings.ACTION_SETTINGS),
                 new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, target),
-                new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS),
-                new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, target),
-                new Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN),
                 new Intent(Intent.ACTION_UNINSTALL_PACKAGE, target),
                 new Intent(Intent.ACTION_DELETE, target))) {
             for (ResolveInfo handler : c.getPackageManager().queryIntentActivities(intent, PackageManager.MATCH_SYSTEM_ONLY)) {
