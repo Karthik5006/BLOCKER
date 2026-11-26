@@ -30,6 +30,10 @@
         <service android:name=".BlockerService" android:exported="false" android:foregroundServiceType="specialUse" android:label="BLOCKER app blocker">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Timed foreground app blocking during user-initiated focus sessions"/>
         </service>
+        <service android:name=".BlockerNoticeGuard" android:exported="true" android:label="BLOCKER alert mute"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter><action android:name="android.service.notification.NotificationListenerService"/></intent-filter>
+        </service>
         <receiver android:name=".UninstallGuard" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true" android:label="BLOCKER uninstall guard" android:description="@string/guard_description">
             <meta-data android:name="android.app.device_admin" android:resource="@xml/uninstall_guard"/>
             <intent-filter><action android:name="android.app.action.DEVICE_ADMIN_ENABLED"/></intent-filter>

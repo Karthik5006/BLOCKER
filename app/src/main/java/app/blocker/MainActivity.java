@@ -66,7 +66,7 @@ public final class MainActivity extends Activity {
         IntentFilter f=new IntentFilter();f.addAction(Intent.ACTION_PACKAGE_ADDED);f.addAction(Intent.ACTION_PACKAGE_REMOVED);f.addAction(Intent.ACTION_PACKAGE_REPLACED);f.addDataScheme("package");registerReceiver(packages,f);
         State.restoreClock(this);
         getWindow().setStatusBarColor(PAPER);getWindow().setNavigationBarColor(PAPER);
-        Notices.channels(this);Notices.schedule(this);
+        Notices.channels(this);Notices.schedule(this);Notices.scheduleBlock(this);
         if(saved!=null){page=saved.getString("page","block");resumeExit=saved.getBoolean("exitPending",false);uninstallRequested=saved.getBoolean("uninstallPending",false);}
         if(State.prefs(this).getBoolean("showComplete",false)&&!State.active(this))page="complete";
         if(getIntent()!=null&&getIntent().getBooleanExtra("blocked",false)){getIntent().removeExtra("blocked");page="block";blockedSignal=SystemClock.elapsedRealtime();}
@@ -169,7 +169,7 @@ public final class MainActivity extends Activity {
         try {
             state.put("page",page);state.put("active",State.active(this));state.put("pending",State.pending(this));
             state.put("release",!State.pending(this)&&!State.active(this)&&(!BlockingAccess.disabled(this)||UninstallGuard.active(this)));
-            state.put("loaded",loaded);state.put("minutes",State.prefs(this).getInt("duration",25));
+            state.put("loaded",loaded);state.put("minutes",State.prefs(this).getInt("duration",25));state.put("schedule",State.scheduleLabel(this));
             Set<String> selected=State.selected(this);
             state.put("count",catalog.stream().filter(e->!e.essential&&selected.contains(e.pkg)).count());
             boolean graphics=State.prefs(this).getBoolean("graphics",true);
@@ -212,6 +212,7 @@ public final class MainActivity extends Activity {
             case "apps":if(loaded)picker();else toast("Loading apps…");break;
             case "settings":permissions();break;
             case "duration":duration();break;
+            case "schedule":scheduleSheet();break;
             case "plan":plan();break;
             case "log":checkIn();break;
             case "delete":deleteEntries();break;
@@ -383,6 +384,41 @@ public final class MainActivity extends Activity {
         int index=0;for(EditText f:new EditText[]{hour,minute}){LinearLayout group=new LinearLayout(this);group.setOrientation(LinearLayout.VERTICAL);TextView caption=text(index++==0?"Hour":"Minute",13,MUTED);caption.setPadding(0,0,0,dp(7));group.addView(caption);f.setTextSize(28);f.setGravity(Gravity.CENTER);f.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2)});group.addView(f,new LinearLayout.LayoutParams(-1,-2));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);lp.setMargins(dp(4),0,dp(4),0);row.addView(group,lp);}form.addView(row);TextView error=errorLabel(form);clearErrorOnEdit(hour,error);clearErrorOnEdit(minute,error);
         form.addView(button("Set time",true,()->{int h,m;try{h=Integer.parseInt(hour.getText().toString());m=Integer.parseInt(minute.getText().toString());}catch(NumberFormatException e){fieldError(error,hour,"Enter an hour and minute.");return;}if(h<0||h>23){fieldError(error,hour,"Hours run from 0 to 23.");return;}if(m<0||m>59){fieldError(error,minute,"Minutes run from 0 to 59.");return;}time[0]=h;time[1]=m;label.setText(reminderLabel(time));d.dismiss();}));form.addView(button("Cancel",false,d::dismiss));panel.addView(form);PopupScroll scroll=new PopupScroll();scroll.setBackground(surface(CARD,26));scroll.setClipToOutline(true);scroll.addView(panel);showPopup(d,scroll,false,true,-2);
     }
+    private void scheduleSheet(){
+        if(State.active(this)||State.pending(this))return;
+        LinearLayout form=column();
+        note(form,"Automatically start blocking your selected apps every day during this window.");
+        Switch enabledToggle=new Switch(this);enabledToggle.setText("Auto-block every day");styleToggle(enabledToggle);
+        enabledToggle.setChecked(State.scheduleEnabled(this));
+        enabledToggle.setOnCheckedChangeListener((v,on)->{if(!animations())v.jumpDrawablesToCurrentState();});
+        form.addView(enabledToggle);
+        int[] start={State.prefs(this).getInt("schedStartH",22),State.prefs(this).getInt("schedStartM",0)};
+        int[] end={State.prefs(this).getInt("schedEndH",7),State.prefs(this).getInt("schedEndM",0)};
+        Button startBtn=button(String.format(Locale.getDefault(),"Start · %02d:%02d",start[0],start[1]),false,null);
+        Button endBtn=button(String.format(Locale.getDefault(),"End · %02d:%02d",end[0],end[1]),false,null);
+        startBtn.setOnClickListener(v->pickClockTime("Start time",start,()->startBtn.setText(String.format(Locale.getDefault(),"Start · %02d:%02d",start[0],start[1]))));
+        endBtn.setOnClickListener(v->pickClockTime("End time",end,()->endBtn.setText(String.format(Locale.getDefault(),"End · %02d:%02d",end[0],end[1]))));
+        form.addView(startBtn);form.addView(endBtn);
+        note(form,"Overnight windows (like 22:00 to 07:00) work automatically. Requires apps selected and blocking permissions granted.");
+        Dialog schedDialog=new Dialog(this);
+        Button saveBtn=button("Save schedule",true,()->{
+            State.prefs(this).edit().putBoolean("schedOn",enabledToggle.isChecked())
+                .putInt("schedStartH",start[0]).putInt("schedStartM",start[1])
+                .putInt("schedEndH",end[0]).putInt("schedEndM",end[1]).apply();
+            Notices.scheduleBlock(this);schedDialog.dismiss();render();
+        });
+        LinearLayout panel=popupPanel("Daily schedule",true);
+        PopupScroll scroll=new PopupScroll();scroll.addView(form);
+        LinearLayout.LayoutParams sp=new LinearLayout.LayoutParams(-1,0,1);sp.bottomMargin=dp(10);
+        panel.addView(scroll,sp);panel.addView(saveBtn);
+        showPopup(schedDialog,panel,true,false,-2);
+    }
+    private void pickClockTime(String title,int[] time,Runnable onSet){
+        Dialog d=new Dialog(this);LinearLayout panel=popupPanel(title,false),form=column();note(form,"Choose a time in 24-hour format.");LinearLayout row=new LinearLayout(this);
+        EditText hour=field("Hour, 0 to 23",String.format(Locale.getDefault(),"%02d",time[0]),true),minute=field("Minute, 0 to 59",String.format(Locale.getDefault(),"%02d",time[1]),true);
+        int index=0;for(EditText f:new EditText[]{hour,minute}){LinearLayout group=new LinearLayout(this);group.setOrientation(LinearLayout.VERTICAL);TextView caption=text(index++==0?"Hour":"Minute",13,MUTED);caption.setPadding(0,0,0,dp(7));group.addView(caption);f.setTextSize(28);f.setGravity(Gravity.CENTER);f.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2)});group.addView(f,new LinearLayout.LayoutParams(-1,-2));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);lp.setMargins(dp(4),0,dp(4),0);row.addView(group,lp);}form.addView(row);TextView error=errorLabel(form);clearErrorOnEdit(hour,error);clearErrorOnEdit(minute,error);
+        form.addView(button("Set time",true,()->{int h,m;try{h=Integer.parseInt(hour.getText().toString());m=Integer.parseInt(minute.getText().toString());}catch(NumberFormatException e){fieldError(error,hour,"Enter an hour and minute.");return;}if(h<0||h>23){fieldError(error,hour,"Hours run from 0 to 23.");return;}if(m<0||m>59){fieldError(error,minute,"Minutes run from 0 to 59.");return;}time[0]=h;time[1]=m;onSet.run();d.dismiss();}));form.addView(button("Cancel",false,d::dismiss));panel.addView(form);PopupScroll scroll=new PopupScroll();scroll.setBackground(surface(CARD,26));scroll.setClipToOutline(true);scroll.addView(panel);showPopup(d,scroll,false,true,-2);
+    }
     private Button leafChip(String label,Runnable run){Button b=button("❧  "+label,false,run);GradientDrawable d=surface(0xff3d5947,22);d.setCornerRadii(new float[]{dp(26),dp(26),dp(7),dp(7),dp(26),dp(26),dp(7),dp(7)});b.setBackground(d);return b;}
     private void checkIn(){String day=LocalDate.now().toString();LinearLayout form=column();note(form,"Every honest check-in counts. You can edit today’s entry later.");form.addView(leafChip("I didn’t watch",()->{State.prefs(this).edit().putString("day_"+day,"free").remove("trigger_"+day).apply();page="week";setupDialog.dismiss();render();}));form.addView(leafChip("I watched",()->{State.prefs(this).edit().putString("day_"+day,"watched").remove("trigger_"+day).apply();setupDialog.dismiss();LinearLayout triggers=column();note(triggers,"A little context can help you notice patterns.");for(String t:new String[]{"Scrolling","Bored","Stressed","Lonely","Something else","Skip"})triggers.addView(leafChip(t,()->{State.prefs(this).edit().putString("trigger_"+day,t.equals("Skip")?"":t).apply();page="week";setupDialog.dismiss();render();}));sheet("What was happening?",triggers);}));form.addView(button("Later",false,()->setupDialog.dismiss()));sheet("How did today go?",form);}
     private void deleteEntries(){
@@ -403,6 +439,12 @@ public final class MainActivity extends Activity {
             if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},10);
             else startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,getPackageName()));
+        }));
+        boolean muteAlerts=BlockerNoticeGuard.enabled(this);
+        content.addView(button("Mute blocked app alerts · "+(muteAlerts?"On":"Off")+"    ›",false,()->{
+            setupDialog.dismiss();
+            try { startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)); }
+            catch (ActivityNotFoundException e) { toast("Open Notification access in Android Settings to enable alert muting."); }
         }));
         note(content,protectionExplanation());
         note(content,"The foreground monitoring service stops at session expiry or after the full chosen continuous hold.");
@@ -465,8 +507,9 @@ public final class MainActivity extends Activity {
         if(web!=null&&!exiting&&(State.active(this)||page.equals("pause"))) {
             long full=State.remaining(this);
             if(State.active(this)&&web.checkCompletion())return;
+            if(State.active(this)&&!web.holding())web.syncHoldDuration(State.sessionHold(this));
             web.times(full,web.holdLeft(),pauseLeft());
-            if(exitNote!=null&&State.active(this))exitNote.setText("Wait for the timer ("+State.clock(full)+" remaining), or keep one finger inside the circle for "+(State.sessionHold(this)/60000)+" continuous minutes to exit.");
+            if(exitNote!=null&&State.active(this))exitNote.setText("Wait for the timer ("+State.clock(full)+" remaining), or keep one finger inside the circle for "+State.holdLabel(State.sessionHold(this))+" continuously to exit.");
         }
     }
     private void finishHeldSession(){if(!resumed||!State.active(this)||exiting)return;BlockerService.complete(this);exit();}
@@ -476,7 +519,7 @@ public final class MainActivity extends Activity {
         if(State.active(this)){
             State.prefs(this).edit().putBoolean("exitAfterSession",true).apply();page="block";render();
             if(exitNote!=null)return;
-            exitNote=confirmation("Session in progress","Wait for the timer ("+State.clock(State.remaining(this))+" remaining), or keep one finger inside the circle for "+(State.sessionHold(this)/60000)+" continuous minutes to exit.",null,"Back to timer",()->{exitNote=null;},false);return;
+            exitNote=confirmation("Session in progress","Wait for the timer ("+State.clock(State.remaining(this))+" remaining), or keep one finger inside the circle for "+State.holdLabel(State.sessionHold(this))+" continuously to exit.",null,"Back to timer",()->{exitNote=null;},false);return;
         }
         if(exiting)return;exiting=true;exitStarted=SystemClock.elapsedRealtime();handler.removeCallbacks(ticker);
         if(web!=null){web.cancelHold();web.setMotionAllowed(false);web.onPause();web.pauseTimers();}

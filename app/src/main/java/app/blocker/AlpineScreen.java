@@ -27,7 +27,8 @@ final class AlpineScreen extends WebView {
  @Override public ActionMode startActionMode(ActionMode.Callback callback){return null;}
  @Override public ActionMode startActionMode(ActionMode.Callback callback,int type){return null;}
  private static String asset(Activity a,String name){try(BufferedReader r=new BufferedReader(new InputStreamReader(a.getAssets().open(name),StandardCharsets.UTF_8))){StringBuilder out=new StringBuilder();String line;while((line=r.readLine())!=null)out.append(line).append('\n');return out.toString();}catch(IOException e){throw new IllegalStateException(name,e);}}
- void update(JSONObject s){sessionActive=s.optBoolean("active",false);long duration=s.optLong("holdDuration",300000);if(duration!=hold.duration())hold.duration(duration);if(!sessionActive)cancelHold(false);if(ready)evaluateJavascript("screenState(JSON.parse("+JSONObject.quote(s.toString())+"))",null);}
+ void update(JSONObject s){sessionActive=s.optBoolean("active",false);long duration=s.optLong("holdDuration",300000);if(!tracking&&duration!=hold.duration())hold.duration(duration);if(!sessionActive)cancelHold(false);if(ready)evaluateJavascript("screenState(JSON.parse("+JSONObject.quote(s.toString())+"))",null);}
+ void syncHoldDuration(long duration){if(tracking||duration==hold.duration())return;hold.duration(duration);if(ready)evaluateJavascript("if(window.setHoldDuration)setHoldDuration("+duration+")",null);}
  void setMotionAllowed(boolean allowed){motionAllowed=allowed;if(ready)evaluateJavascript("setMotion("+allowed+")",null);}
  void event(String name){if(ready)evaluateJavascript("sceneEvent("+JSONObject.quote(name)+")",null);}
  void times(long session,long early,long pause){if(ready)evaluateJavascript("times("+session+","+early+","+pause+")",null);}

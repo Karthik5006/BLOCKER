@@ -39,23 +39,70 @@ final class State {
     static boolean active(Context c) { return requested(c) && remaining(c) > 0; }
     static void prepare(Context c, int minutes) {
         if (minutes < 1 || minutes > 1439) throw new IllegalArgumentException("Choose between 1 minute and 23 hours 59 minutes.");
+        long hold = effectiveHold(holdDuration(c), minutes * 60_000L);
         prefs(c).edit().putBoolean("pending", true).putBoolean("active", false).putBoolean("sessionRecorded",false).putBoolean("showComplete",false).putBoolean("exitAfterSession",false).putInt("jar",0)
             .putInt("boot",boot(c)).putLong("setupAt",SystemClock.elapsedRealtime())
-            .putInt("duration",minutes).putLong("sessionHold",holdDuration(c)).remove("unlockEnd").remove("wallEnd").putLong("sessionEnd",0).commit();
+            .putInt("duration",minutes).putLong("sessionHold",hold).remove("unlockEnd").remove("wallEnd").putLong("sessionEnd",0).commit();
         Notices.sessionAlarm(c);
     }
     static void activate(Context c) {
         if(!pending(c) || !UninstallGuard.acquire(c)) return;
-        long end=SystemClock.elapsedRealtime()+prefs(c).getInt("duration",25)*60_000L;
+        int minutes = prefs(c).getInt("duration", 25);
+        long end=SystemClock.elapsedRealtime()+minutes*60_000L;
         prefs(c).edit().putBoolean("pending",false).putBoolean("active",true).putLong("sessionEnd",end)
-            .putLong("wallEnd",System.currentTimeMillis()+prefs(c).getInt("duration",25)*60_000L).commit();
+            .putLong("wallEnd",System.currentTimeMillis()+minutes*60_000L).commit();
+        BlockerNoticeGuard.sweep(c);
+    }
+    static boolean activateScheduled(Context c, int minutes) {
+        if (minutes < 1 || minutes > 1439 || active(c)) return false;
+        long hold = effectiveHold(holdDuration(c), minutes * 60_000L);
+        long end = SystemClock.elapsedRealtime() + minutes * 60_000L;
+        prefs(c).edit().putBoolean("pending", false).putBoolean("active", true)
+            .putBoolean("sessionRecorded", false).putBoolean("showComplete", false).putBoolean("exitAfterSession", false)
+            .putInt("boot", boot(c)).putInt("duration", minutes).putLong("sessionHold", hold)
+            .putLong("sessionEnd", end).putLong("wallEnd", System.currentTimeMillis() + minutes * 60_000L).commit();
+        BlockerNoticeGuard.sweep(c);
+        return true;
     }
     static void stop(Context c) {
         prefs(c).edit().putBoolean("active",false).putBoolean("pending",false)
             .remove("unlockEnd").remove("wallEnd").putLong("sessionEnd",0).commit();
     }
     static long holdDuration(Context c){int m=prefs(c).getInt("holdMinutes",5);return (m==3||m==10?m:5)*60000L;}
-    static long sessionHold(Context c){long n=prefs(c).getLong("sessionHold",300000);return n==180000||n==600000?n:300000;}
+    static long effectiveHold(long configuredMs, long windowMs) {
+        if (windowMs <= 0) return configuredMs;
+        if (windowMs <= configuredMs) {
+            long half = Math.max(10_000L, ((windowMs / 2L) / 5_000L) * 5_000L);
+            return Math.min(configuredMs, Math.min(windowMs, half));
+        }
+        return configuredMs;
+    }
+    static long sessionHold(Context c){
+        long base = prefs(c).getLong("sessionHold", 300_000L);
+        if (base < 10_000L || base > 600_000L) base = 300_000L;
+        return active(c) ? effectiveHold(base, remaining(c)) : base;
+    }
+    static String holdLabel(long ms) {
+        long sec = Math.max(10L, Math.round(ms / 1000.0));
+        if (sec < 60L) return sec + " seconds";
+        long min = sec / 60L, rem = sec % 60L;
+        if (rem == 0L) return min + (min == 1L ? " minute" : " minutes");
+        return min + " min " + rem + " sec";
+    }
+    static boolean scheduleEnabled(Context c) { return prefs(c).getBoolean("schedOn", false); }
+    static int scheduleMinutes(Context c) {
+        int sh = prefs(c).getInt("schedStartH", 22), sm = prefs(c).getInt("schedStartM", 0);
+        int eh = prefs(c).getInt("schedEndH", 7), em = prefs(c).getInt("schedEndM", 0);
+        int start = sh * 60 + sm, end = eh * 60 + em;
+        int diff = end > start ? (end - start) : (1440 - start + end);
+        return Math.max(1, Math.min(1439, diff));
+    }
+    static String scheduleLabel(Context c) {
+        if (!scheduleEnabled(c)) return "Off";
+        return String.format(Locale.getDefault(), "%02d:%02d – %02d:%02d",
+            prefs(c).getInt("schedStartH", 22), prefs(c).getInt("schedStartM", 0),
+            prefs(c).getInt("schedEndH", 7), prefs(c).getInt("schedEndM", 0));
+    }
     static void completed(Context c){
         if(!prefs(c).getBoolean("active",false)||prefs(c).getBoolean("sessionRecorded",false))return;
         String key="sessions_"+LocalDate.now();prefs(c).edit().putInt(key,prefs(c).getInt(key,0)+1).putBoolean("showComplete",true).putBoolean("sessionRecorded",true).commit();

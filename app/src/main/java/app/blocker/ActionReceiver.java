@@ -10,6 +10,15 @@ public final class ActionReceiver extends BroadcastReceiver {
             else BlockerService.exit(c);
         } else if ("keep-alive".equals(action) && State.active(c)) {
             BlockerService.ensureRunning(c);
+        } else if ("schedule-start".equals(action)) {
+            Notices.scheduleBlock(c);
+            if (State.scheduleEnabled(c) && !State.active(c) && !State.selected(c).isEmpty() && BlockingAccess.enabled(c)) {
+                if (State.activateScheduled(c, State.scheduleMinutes(c))) {
+                    Notices.session(c);
+                    Notices.sessionAlarm(c);
+                    BlockerService.ensureRunning(c);
+                }
+            }
         } else if ("remind".equals(action)) {
             Notices.remind(c);
         }

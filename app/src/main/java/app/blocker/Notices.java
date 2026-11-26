@@ -23,6 +23,22 @@ final class Notices {
         long at = android.os.SystemClock.elapsedRealtime() + 1000L;
         c.getSystemService(AlarmManager.class).setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, keepAliveIntent(c));
     }
+    private static PendingIntent blockScheduleIntent(Context c) {
+        return PendingIntent.getBroadcast(c, 6, new Intent(c, ActionReceiver.class).setAction("schedule-start"), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+    static void scheduleBlock(Context c) {
+        AlarmManager alarm = c.getSystemService(AlarmManager.class);
+        PendingIntent pi = blockScheduleIntent(c);
+        alarm.cancel(pi);
+        if (!State.scheduleEnabled(c)) return;
+        Calendar time = Calendar.getInstance();
+        time.set(Calendar.HOUR_OF_DAY, State.prefs(c).getInt("schedStartH", 22));
+        time.set(Calendar.MINUTE, State.prefs(c).getInt("schedStartM", 0));
+        time.set(Calendar.SECOND, 0);
+        time.set(Calendar.MILLISECOND, 0);
+        if (time.getTimeInMillis() <= System.currentTimeMillis()) time.add(Calendar.DATE, 1);
+        alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, time.getTimeInMillis(), pi);
+    }
     static void cancelSessionAlarm(Context c) {
         AlarmManager am = c.getSystemService(AlarmManager.class);
         am.cancel(endIntent(c));
